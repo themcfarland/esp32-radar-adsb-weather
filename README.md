@@ -7,6 +7,8 @@ Aktualni verze: **0.19.0-home-web-3alerts-layers**
 
 > Projekt neni urcen pro varianty 7B/7C bez upravy ovladace displeje.
 
+![ESP32 Radar ADS-B Weather](IMG_20260804_203014.jpg)
+
 ## Hlavni funkce
 
 - animace radarovych snimku CHMI,
