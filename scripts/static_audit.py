@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Focused static audit for v0.19.0 home web, three alerts and layers."""
+"""Focused static audit for v0.22.0 diagnostics, clock and weekly backlight schedule."""
 from pathlib import Path
 import re
 import sys
@@ -33,14 +33,57 @@ ui_cpp = read("src/ui.cpp")
 patch = read("scripts/patch_display_driver.py")
 readme = read("README.md")
 
-require("0.19.0-home-web-3alerts-layers" in version,
-        "firmware version is not v0.19.0")
+require("0.22.0-weekly-backlight" in version,
+        "firmware version is not v0.22.0")
 require("qio_opi" in pio and "board_build.psram_type = opi" in pio,
         "8 MB OPI PSRAM configuration is missing")
-require("RGB bounce buffer = 20 lines" in patch,
+require("BOUNCE_LINES = 20" in patch,
         "20-line bounce-buffer patch is missing")
+require(r"\d+[uUlL]*" in patch and "strict=False" in patch,
+        "display patch is not tolerant of stale numeric cache values")
 require("ESP_PANEL_LCD_RGB_CLK_HZ" not in patch,
         "display patch must not alter panel PCLK")
+
+
+require('server_.on("/diagnostics"' in device_cpp and
+        'server_.on("/api/diagnostics"' in device_cpp,
+        "web diagnostics routes are missing")
+require("buildDiagnosticsPage" in device_h and
+        "handleDiagnosticsJson" in device_h,
+        "diagnostics page or JSON handler declaration is missing")
+require("RuntimeDiagnostics" in models and
+        "updateRuntimeDiagnostics" in main,
+        "runtime diagnostics data model is missing")
+require("%H:%M:%S  %d.%m.%Y" in ui_cpp and
+        "RADAR CR + ADS-B" not in ui_cpp,
+        "display header was not replaced by local clock and date")
+require("CET-1CEST,M3.5.0/2,M10.5.0/3" in config and
+        'setenv("TZ", Config::TZ_INFO, 1)' in main and "tzset()" in main,
+        "automatic CET/CEST timezone rule is missing")
+
+
+require("BACKLIGHT_DAY_COUNT = 7" in device_h and
+        "BacklightDaySchedule" in device_h,
+        "seven-day backlight schedule model is missing")
+require('preferences.putBool("bl_sched"' in device_cpp and
+        'preferences.putUShort(key, settings_.backlightDays[day].startMinutes)' in device_cpp and
+        'preferences.putUShort(key, settings_.backlightDays[day].endMinutes)' in device_cpp,
+        "backlight schedule is not persisted to NVS")
+require("Plan podsviceni" in device_cpp and
+        "bl_start_" in device_cpp and "bl_end_" in device_cpp,
+        "weekly backlight web controls are missing")
+require("dayScheduleActive" in main and
+        "toggle_backlight" in main and
+        "backlightWakeUntil = now + 60000U" in main,
+        "backlight scheduling or one-minute touch wake is missing")
+require("setBacklightWakeOverlay" in ui_cpp and
+        "LV_EVENT_RELEASED" in ui_cpp,
+        "safe touch-wake overlay is missing")
+require("backlight_schedule_enabled" in device_cpp and
+        "backlight_wake_remaining_ms" in device_cpp,
+        "backlight diagnostics are missing")
+require("href='/diagnostics'" in device_cpp,
+        "diagnostics link is missing from the main page")
 
 require("WebServer" in device_h and "DNSServer" in device_h,
         "web server or captive DNS declaration is missing")
@@ -113,6 +156,14 @@ require("LV_EVENT_CLICKED" in ui_cpp,
         "map touch event is missing")
 require("radar-adsb.local" in readme and "tri letounu" in readme,
         "README does not document home web and three aircraft")
+
+require('server_.on("/lcd-resync"' in device_cpp and
+        "consumeLcdResyncRequested" in device_h and
+        "consumeLcdResyncRequested" in main,
+        "manual web LCD recovery is missing")
+require("periodic LCD watchdog" not in main and
+        "DISPLAY_SYNC_RECOVERY_MS" not in config,
+        "periodic LCD watchdog must remain disabled")
 
 # Runtime radar function must not call filesystem APIs.
 m = re.search(r"bool RadarService::updateFramesInMemory\(\) \{(.*?)\n\}",
@@ -202,6 +253,9 @@ if errors:
 
 print("STATIC AUDIT OK")
 print("Network: first-run AP plus persistent STA web UI")
+print("Clock: local date/time with automatic CET/CEST")
+print("Diagnostics: live web page, JSON API and backlight state")
 print("Aircraft: three exact callsign/ICAO visual highlights")
 print("Layers: radar and ADS-B independently switchable")
+print("Backlight: seven-day schedule with 60-second touch wake")
 print("Radar: runtime PNG update remains RAM-only")

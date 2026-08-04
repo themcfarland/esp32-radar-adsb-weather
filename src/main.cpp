@@ -4,6 +4,7 @@
 #include <Waveshare_ST7262_LVGL.h>
 #include <esp_system.h>
 #include <esp_lcd_panel_rgb.h>
+#include <time.h>
 
 #include "adsb_service.h"
 #include "astronomy_service.h"
@@ -26,6 +27,7 @@ bool radarLayerEnabled = true;
 bool adsbLayerEnabled = true;
 Preferences mapPreferences;
 MapViewport mapViewport;
+RuntimeDiagnostics runtimeDiagnostics;
 
 uint8_t radarFrame = 0;
 uint32_t lastAdsbUpdate = 0;
@@ -44,6 +46,14 @@ bool mapPreferencesReady = false;
 bool displayResyncPending = false;
 bool lastNetworkConnected = false;
 uint32_t lastMapViewChange = 0;
+uint32_t lcdResyncCount = 0;
+uint32_t mapRedrawCount = 0;
+uint32_t lastMapRedrawDurationMs = 0;
+int lcdBacklightState = 1;
+bool backlightOn = true;
+bool backlightScheduledWindowActive = true;
+bool backlightTemporaryWake = false;
+uint32_t backlightWakeUntil = 0;
 
 namespace {
 bool isUnsetValue(const String& value) {
@@ -65,11 +75,12 @@ void applyDeviceSettings() {
   radarLayerEnabled = settings.radarLayerEnabled;
   adsbLayerEnabled = settings.adsbLayerEnabled;
   DebugLog::printf(
-      "Runtime config: ADSB=%s WU=%s layers=radar:%d adsb:%d alerts=%s [%s|%s|%s]\n",
+      "Runtime config: ADSB=%s WU=%s layers=radar:%d adsb:%d alerts=%s [%s|%s|%s] backlightSchedule=%s\n",
       settings.adsbUrl.c_str(), settings.wuStationId.c_str(),
       radarLayerEnabled ? 1 : 0, adsbLayerEnabled ? 1 : 0,
       aircraftAlert.enabled ? "on" : "off", aircraftAlert.targets[0],
-      aircraftAlert.targets[1], aircraftAlert.targets[2]);
+      aircraftAlert.targets[1], aircraftAlert.targets[2],
+      settings.backlightScheduleEnabled ? "on" : "off");
 }
 
 MapZoomMode storedZoomMode(uint8_t raw) {
@@ -188,6 +199,7 @@ void requestDisplaySyncRecovery(const char* reason) {
 
   const esp_err_t err = esp_lcd_rgb_panel_restart(lcd->getHandle());
   if (err == ESP_OK) {
+    ++lcdResyncCount;
     DebugLog::printf("LCD DMA resync requested: %s\n",
                      reason ? reason : "runtime operation");
   } else {
@@ -196,6 +208,169 @@ void requestDisplaySyncRecovery(const char* reason) {
                      reason ? reason : "runtime operation");
   }
   lastDisplaySyncRecovery = millis();
+}
+
+bool deadlinePending(uint32_t now, uint32_t deadline) {
+  return deadline != 0 &&
+         static_cast<int32_t>(deadline - now) > 0;
+}
+
+bool dayScheduleActive(const DeviceSettings& settings,
+                       const struct tm& localTime) {
+  if (!settings.backlightScheduleEnabled) return true;
+
+  // tm_wday: Sunday=0. Configuration array: Monday=0 ... Sunday=6.
+  const uint8_t today = static_cast<uint8_t>((localTime.tm_wday + 6) % 7);
+  const uint8_t previous = static_cast<uint8_t>((today + 6) % 7);
+  const uint16_t minuteOfDay = static_cast<uint16_t>(
+      localTime.tm_hour * 60 + localTime.tm_min);
+
+  const BacklightDaySchedule& current = settings.backlightDays[today];
+  if (current.enabled) {
+    if (current.startMinutes == current.endMinutes) return true;
+    if (current.startMinutes < current.endMinutes) {
+      if (minuteOfDay >= current.startMinutes &&
+          minuteOfDay < current.endMinutes) {
+        return true;
+      }
+    } else if (minuteOfDay >= current.startMinutes) {
+      // Interval starts today and continues after midnight.
+      return true;
+    }
+  }
+
+  // Complete an overnight interval started on the previous day.
+  const BacklightDaySchedule& previousDay =
+      settings.backlightDays[previous];
+  return previousDay.enabled &&
+         previousDay.startMinutes > previousDay.endMinutes &&
+         minuteOfDay < previousDay.endMinutes;
+}
+
+void setBacklight(bool on, const char* reason) {
+  if (backlightOn == on) return;
+
+  if (!on) {
+    lvgl_port_lock(-1);
+    UI::setBacklightWakeOverlay(true);
+    lvgl_port_unlock();
+    toggle_backlight(lcdBacklightState);
+  } else {
+    toggle_backlight(lcdBacklightState);
+    lvgl_port_lock(-1);
+    UI::setBacklightWakeOverlay(false);
+    lvgl_port_unlock();
+  }
+
+  backlightOn = on;
+  if (on) {
+    // Data collection continues while dark. Redraw only once when the panel is
+    // visible again, which reduces unnecessary PSRAM traffic overnight.
+    mapDirty = true;
+    lastHeaderUpdate = 0;
+  }
+  DebugLog::printf("Backlight: %s (%s)\n", on ? "ON" : "OFF",
+                   reason ? reason : "schedule");
+}
+
+void updateBacklightControl(uint32_t now) {
+  if (UI::consumeBacklightWakeRequest()) {
+    backlightWakeUntil = now + 60000U;
+    DebugLog::println("Backlight: touch wake for 60 seconds");
+  }
+
+  const DeviceSettings& settings = deviceConfig.settings();
+  const time_t epoch = time(nullptr);
+  const bool timeReady = epoch > 1700000000;
+  bool scheduleWindow = true;
+  if (settings.backlightScheduleEnabled && timeReady) {
+    struct tm localTime {};
+    localtime_r(&epoch, &localTime);
+    scheduleWindow = dayScheduleActive(settings, localTime);
+  }
+
+  // Until NTP is available the display stays on. This prevents an incorrect
+  // clock at boot from unexpectedly switching the backlight off.
+  if (!timeReady) scheduleWindow = true;
+  if (!settings.backlightScheduleEnabled) scheduleWindow = true;
+
+  if (scheduleWindow) backlightWakeUntil = 0;
+  backlightScheduledWindowActive = scheduleWindow;
+  backlightTemporaryWake =
+      !scheduleWindow && deadlinePending(now, backlightWakeUntil);
+  const bool desiredOn = scheduleWindow || backlightTemporaryWake;
+  setBacklight(desiredOn, backlightTemporaryWake ? "touch wake" :
+                                  (scheduleWindow ? "active schedule" :
+                                                    "inactive schedule"));
+}
+
+void updateRuntimeDiagnostics() {
+  const uint32_t now = millis();
+  const AircraftSnapshot& aircraft = adsb.snapshot();
+  const WeatherSnapshot& weatherData = weather.snapshot();
+  const AstronomySnapshot& astronomyData = astronomy.snapshot();
+
+  runtimeDiagnostics.uptimeMs = now;
+  runtimeDiagnostics.lastAdsbUpdateMs = lastAdsbUpdate;
+  runtimeDiagnostics.lastRadarUpdateMs = lastRadarUpdate;
+  runtimeDiagnostics.lastCurrentWeatherUpdateMs = lastCurrentWeatherUpdate;
+  runtimeDiagnostics.lastForecastUpdateMs = lastForecastUpdate;
+  runtimeDiagnostics.lastAstronomyUpdateMs = lastAstronomyUpdate;
+  runtimeDiagnostics.lastDisplaySyncRecoveryMs = lastDisplaySyncRecovery;
+  runtimeDiagnostics.lcdResyncCount = lcdResyncCount;
+  runtimeDiagnostics.mapRedrawCount = mapRedrawCount;
+  runtimeDiagnostics.lastMapRedrawDurationMs = lastMapRedrawDurationMs;
+  runtimeDiagnostics.radarFrameCount = radar.frameCount();
+  runtimeDiagnostics.currentRadarFrame = radarFrame;
+  runtimeDiagnostics.forecastSlotCount = weatherData.forecastSlotCount;
+  runtimeDiagnostics.aircraftCount = aircraft.count;
+  runtimeDiagnostics.radarCacheReady = radar.animationCacheReady();
+  runtimeDiagnostics.currentWeatherValid = weatherData.current.valid;
+  runtimeDiagnostics.forecastValid = weatherData.forecastValid;
+  runtimeDiagnostics.astronomyValid = astronomyData.valid;
+  runtimeDiagnostics.backlightOn = backlightOn;
+  runtimeDiagnostics.backlightScheduleEnabled =
+      deviceConfig.settings().backlightScheduleEnabled;
+  runtimeDiagnostics.backlightScheduledWindowActive =
+      backlightScheduledWindowActive;
+  runtimeDiagnostics.backlightTemporaryWake = backlightTemporaryWake;
+  runtimeDiagnostics.backlightWakeRemainingMs =
+      backlightTemporaryWake && deadlinePending(now, backlightWakeUntil)
+          ? static_cast<uint32_t>(backlightWakeUntil - now)
+          : 0;
+  strlcpy(runtimeDiagnostics.radarStatus, radar.status(),
+          sizeof(runtimeDiagnostics.radarStatus));
+  strlcpy(runtimeDiagnostics.adsbStatus, aircraft.status,
+          sizeof(runtimeDiagnostics.adsbStatus));
+  strlcpy(runtimeDiagnostics.weatherStatus, weatherData.status,
+          sizeof(runtimeDiagnostics.weatherStatus));
+  strlcpy(runtimeDiagnostics.astronomyStatus, astronomyData.status,
+          sizeof(runtimeDiagnostics.astronomyStatus));
+  strlcpy(runtimeDiagnostics.forecastProduct, weatherData.forecastProduct,
+          sizeof(runtimeDiagnostics.forecastProduct));
+  strlcpy(runtimeDiagnostics.mapView,
+          MapRenderer::zoomModeLabel(mapViewport.mode),
+          sizeof(runtimeDiagnostics.mapView));
+
+  const time_t epoch = time(nullptr);
+  runtimeDiagnostics.timeSynchronized = epoch > 1700000000;
+  if (runtimeDiagnostics.timeSynchronized) {
+    struct tm localTime {};
+    localtime_r(&epoch, &localTime);
+    strftime(runtimeDiagnostics.localTime,
+             sizeof(runtimeDiagnostics.localTime), "%H:%M:%S", &localTime);
+    strftime(runtimeDiagnostics.localDate,
+             sizeof(runtimeDiagnostics.localDate), "%d.%m.%Y", &localTime);
+    strftime(runtimeDiagnostics.timezone,
+             sizeof(runtimeDiagnostics.timezone), "%Z", &localTime);
+  } else {
+    strlcpy(runtimeDiagnostics.localTime, "--:--:--",
+            sizeof(runtimeDiagnostics.localTime));
+    strlcpy(runtimeDiagnostics.localDate, "--.--.----",
+            sizeof(runtimeDiagnostics.localDate));
+    strlcpy(runtimeDiagnostics.timezone, "CET/CEST",
+            sizeof(runtimeDiagnostics.timezone));
+  }
 }
 
 void updateHeader() {
@@ -240,6 +415,7 @@ void prepareRadarAnimation() {
 }
 
 void redrawMap() {
+  const uint32_t redrawStarted = millis();
   lv_obj_t* canvas = nullptr;
   uint16_t* buffer = nullptr;
 
@@ -284,6 +460,8 @@ void redrawMap() {
   lvgl_port_unlock();
 
   mapDirty = false;
+  ++mapRedrawCount;
+  lastMapRedrawDurationMs = millis() - redrawStarted;
 }
 
 void performInitialUpdates() {
@@ -313,6 +491,8 @@ void performInitialUpdates() {
 void setup() {
   DebugLog::begin(115200);
   DebugLog::println("\nWaveshare 7in Radar + ADS-B + Weather");
+  setenv("TZ", Config::TZ_INFO, 1);
+  tzset();
   printHardwareInfo();
   loadMapViewport();
   deviceConfig.load();
@@ -327,7 +507,7 @@ void setup() {
   // panel starts reading PSRAM. This avoids the heaviest flash/PSRAM traffic
   // during LCD operation. Later five-minute updates use one PNG in PSRAM only.
   radar.begin();
-  deviceConfig.begin(&adsb.snapshot());
+  deviceConfig.begin(&adsb.snapshot(), &runtimeDiagnostics);
   if (deviceConfig.stationConnected()) {
     Serial.println("Preloading CHMI radar files before LCD initialization...");
     radar.updateFrames();
@@ -346,6 +526,11 @@ void setup() {
     Serial.println("Fatal: map canvas allocation failed. Check PSRAM settings.");
     while (true) delay(1000);
   }
+  // lcd_init() leaves the CH422G backlight output high. Keep the software
+  // state synchronized before applying the weekly schedule.
+  lcdBacklightState = 1;
+  backlightOn = true;
+  updateBacklightControl(millis());
 
   // The LCD and map buffers now own their final PSRAM blocks. Convert each PNG
   // once to a compact 8-bit overlay; animation never decodes PNG again.
@@ -360,6 +545,7 @@ void setup() {
   updateHeader();
   redrawMap();
 
+  updateRuntimeDiagnostics();
   Serial.printf("Startup complete | heap %u kB | PSRAM %u kB\n",
                 static_cast<unsigned>(ESP.getFreeHeap() / 1024),
                 static_cast<unsigned>(ESP.getFreePsram() / 1024));
@@ -367,16 +553,36 @@ void setup() {
 
 void loop() {
   const uint32_t now = millis();
+  updateRuntimeDiagnostics();
   deviceConfig.loop();
 
+  if (deviceConfig.consumeLcdResyncRequested()) {
+    requestDisplaySyncRecovery("manual web request");
+  }
+
   if (deviceConfig.consumeRuntimeSettingsChanged()) {
+    const bool previousRadarLayer = radarLayerEnabled;
+    const bool previousAdsbLayer = adsbLayerEnabled;
+    const AircraftAlertConfig previousAlert = aircraftAlert;
     applyDeviceSettings();
-    mapDirty = true;
+
+    bool alertDisplayChanged = previousAlert.enabled != aircraftAlert.enabled;
+    for (size_t slot = 0; slot < AIRCRAFT_ALERT_SLOT_COUNT; ++slot) {
+      alertDisplayChanged |=
+          strcasecmp(previousAlert.targets[slot], aircraftAlert.targets[slot]) != 0;
+    }
+    if (previousRadarLayer != radarLayerEnabled ||
+        previousAdsbLayer != adsbLayerEnabled || alertDisplayChanged) {
+      mapDirty = true;
+    }
+
     // Saving web settings writes NVS while the RGB panel is active. Schedule
     // one recovery on the next VSYNC after the new settings are applied.
     displayResyncPending = true;
     DebugLog::println("Runtime web settings applied without restart");
   }
+
+  updateBacklightControl(now);
 
   if (!deviceConfig.stationConnected() &&
       due(now, lastWifiRetry, Config::WIFI_RETRY_MS)) {
@@ -455,14 +661,15 @@ void loop() {
     updateAstronomy();
   }
 
-  if (radarLayerEnabled && !UI::radarPaused() && radar.frameCount() > 1 &&
+  if (backlightOn && radarLayerEnabled && !UI::radarPaused() &&
+      radar.frameCount() > 1 &&
       due(now, lastRadarAnimation, Config::RADAR_ANIMATION_MS)) {
     lastRadarAnimation = now;
     radarFrame = (radarFrame + 1) % radar.frameCount();
     mapDirty = true;
   }
 
-  if (mapDirty) redrawMap();
+  if (mapDirty && backlightOn) redrawMap();
 
   if (displayResyncPending) {
     delay(25);
@@ -470,7 +677,7 @@ void loop() {
     displayResyncPending = false;
   }
 
-  if (due(now, lastHeaderUpdate, 2000)) {
+  if (backlightOn && due(now, lastHeaderUpdate, 1000)) {
     lastHeaderUpdate = now;
     updateHeader();
   }
@@ -489,7 +696,7 @@ void loop() {
     lastDebugHeartbeat = now;
     const WeatherSnapshot& ws = weather.snapshot();
     DebugLog::printf(
-        "HEARTBEAT ms=%u WiFi=%d AP=%d heap=%u kB forecast=%s cards=%u layers=R%d/A%d alerts=%s [%s|%s|%s]\n",
+        "HEARTBEAT ms=%u WiFi=%d AP=%d heap=%u kB forecast=%s cards=%u layers=R%d/A%d alerts=%s [%s|%s|%s] BL=%d schedule=%d wake=%d\n",
         static_cast<unsigned>(now),
         deviceConfig.stationConnected() ? 1 : 0,
         deviceConfig.portalActive() ? 1 : 0,
@@ -498,7 +705,9 @@ void loop() {
         static_cast<unsigned>(ws.forecastSlotCount),
         radarLayerEnabled ? 1 : 0, adsbLayerEnabled ? 1 : 0,
         aircraftAlert.enabled ? "on" : "off", aircraftAlert.targets[0],
-        aircraftAlert.targets[1], aircraftAlert.targets[2]);
+        aircraftAlert.targets[1], aircraftAlert.targets[2],
+        backlightOn ? 1 : 0, backlightScheduledWindowActive ? 1 : 0,
+        backlightTemporaryWake ? 1 : 0);
   }
 
   delay(5);

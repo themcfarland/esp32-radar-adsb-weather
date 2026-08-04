@@ -6,6 +6,14 @@
 
 #include "models.h"
 
+constexpr size_t BACKLIGHT_DAY_COUNT = 7;
+
+struct BacklightDaySchedule {
+  bool enabled = true;
+  uint16_t startMinutes = 6U * 60U;
+  uint16_t endMinutes = 23U * 60U;
+};
+
 struct DeviceSettings {
   String wifiSsid;
   String wifiPassword;
@@ -16,6 +24,8 @@ struct DeviceSettings {
   bool adsbLayerEnabled = true;
   bool aircraftAlertEnabled = false;
   String aircraftAlertTargets[AIRCRAFT_ALERT_SLOT_COUNT];
+  bool backlightScheduleEnabled = true;
+  BacklightDaySchedule backlightDays[BACKLIGHT_DAY_COUNT];
 };
 
 class DeviceConfigService {
@@ -23,7 +33,8 @@ class DeviceConfigService {
   DeviceConfigService();
 
   void load();
-  void begin(const AircraftSnapshot* aircraftSnapshot);
+  void begin(const AircraftSnapshot* aircraftSnapshot,
+             const RuntimeDiagnostics* runtimeDiagnostics);
   void loop();
   bool connectStation(uint32_t timeoutMs);
   void ensureNetwork(uint32_t timeoutMs);
@@ -36,6 +47,7 @@ class DeviceConfigService {
   const DeviceSettings& settings() const { return settings_; }
   AircraftAlertConfig alertConfig() const;
   bool consumeRuntimeSettingsChanged();
+  bool consumeLcdResyncRequested();
 
  private:
   void startWebServer();
@@ -47,14 +59,19 @@ class DeviceConfigService {
   void handleSave();
   void handleFactoryReset();
   void handleReboot();
+  void handleLcdResync();
   void handleStatusJson();
+  void handleDiagnostics();
+  void handleDiagnosticsJson();
   void handleCaptivePortal();
   void sendErrorPage(const String& message, int code = 400);
   String buildPage() const;
+  String buildDiagnosticsPage() const;
   bool alertTargetPresent(size_t slot) const;
 
   DeviceSettings settings_;
   const AircraftSnapshot* aircraftSnapshot_ = nullptr;
+  const RuntimeDiagnostics* runtimeDiagnostics_ = nullptr;
   WebServer server_;
   DNSServer dnsServer_;
   bool serverStarted_ = false;
@@ -62,6 +79,7 @@ class DeviceConfigService {
   bool mdnsStarted_ = false;
   bool restartPending_ = false;
   bool runtimeSettingsChanged_ = false;
+  bool lcdResyncRequested_ = false;
   uint32_t restartAt_ = 0;
   String accessPointSsid_;
 };

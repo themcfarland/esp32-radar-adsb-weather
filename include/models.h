@@ -78,6 +78,43 @@ struct WeatherSnapshot {
   char status[96] = "Weather: waiting";
 };
 
+
+struct RuntimeDiagnostics {
+  uint32_t uptimeMs = 0;
+  uint32_t lastAdsbUpdateMs = 0;
+  uint32_t lastRadarUpdateMs = 0;
+  uint32_t lastCurrentWeatherUpdateMs = 0;
+  uint32_t lastForecastUpdateMs = 0;
+  uint32_t lastAstronomyUpdateMs = 0;
+  uint32_t lastDisplaySyncRecoveryMs = 0;
+  uint32_t lcdResyncCount = 0;
+  uint32_t mapRedrawCount = 0;
+  uint32_t lastMapRedrawDurationMs = 0;
+  uint8_t radarFrameCount = 0;
+  uint8_t currentRadarFrame = 0;
+  uint8_t forecastSlotCount = 0;
+  size_t aircraftCount = 0;
+  bool radarCacheReady = false;
+  bool currentWeatherValid = false;
+  bool forecastValid = false;
+  bool astronomyValid = false;
+  bool timeSynchronized = false;
+  bool backlightOn = true;
+  bool backlightScheduleEnabled = true;
+  bool backlightScheduledWindowActive = true;
+  bool backlightTemporaryWake = false;
+  uint32_t backlightWakeRemainingMs = 0;
+  char localTime[12] = "--:--:--";
+  char localDate[16] = "--.--.----";
+  char timezone[12] = "CET/CEST";
+  char radarStatus[112] = "Radar: waiting";
+  char adsbStatus[80] = "ADSB: waiting";
+  char weatherStatus[96] = "Weather: waiting";
+  char astronomyStatus[48] = "Astronomy: waiting";
+  char forecastProduct[16] = "--";
+  char mapView[24] = "cela CR";
+};
+
 struct AstronomySnapshot {
   bool valid = false;
   char sunrise[6] = "--:--";

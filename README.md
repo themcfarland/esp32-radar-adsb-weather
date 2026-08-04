@@ -3,11 +3,20 @@
 Firmware pro puvodni desku **Waveshare ESP32-S3-Touch-LCD-7**
 (800 x 480, ST7262, GT911, CH422G, 8 MB OPI PSRAM).
 
-Aktualni verze: **0.19.0-home-web-3alerts-layers**
+Aktualni verze: **0.22.0-weekly-backlight**
 
 > Projekt neni urcen pro varianty 7B/7C bez upravy ovladace displeje.
 
-![ESP32 Radar ADS-B Weather](IMG_20260804_203014.jpg)
+## Konzervativni obnova LCD ve v0.20.1
+
+Po praktickem testu byl odstranen periodicky restart RGB DMA z verze 0.20.0,
+protoze na tomto panelu zhorsoval vodorovne posuny obrazu. Firmware znovu
+pouziva overeny bounce buffer 20 radku a puvodni rytmus prekreslovani.
+
+Tlacitko **Srovnat LCD** zustava ve webovem rozhrani, ale obnova se spusti
+jen na vyzadani. Automaticka obnova zustava pouze po operacich, ktere ji
+pouzivala stabilnejsi verze 0.19.0, napriklad po aktualizaci radaru v RAM
+nebo ulozeni nastaveni.
 
 ## Hlavni funkce
 
@@ -22,7 +31,11 @@ Aktualni verze: **0.19.0-home-web-3alerts-layers**
 - prvni nastaveni pres Wi-Fi AP,
 - trvale dostupne webove nastaveni v domaci Wi-Fi,
 - graficke zvyrazneni az tri letounu podle callsignu nebo ICAO hex,
-- nezavisle zapinani radarove a ADS-B vrstvy.
+- nezavisle zapinani radarove a ADS-B vrstvy,
+- mistni hodiny a datum v horni liste s automatickym CET/CEST,
+- webova diagnostika na `/diagnostics` s automatickou obnovou,
+- tydenni plan podsviceni pro pondeli az nedeli,
+- docasne probuzeni zhasnuteho displeje dotykem na 1 minutu.
 
 ## Prvni spusteni
 
@@ -87,6 +100,29 @@ Volba se uklada do NVS a po restartu se obnovi. Datove zdroje se mohou dale
 aktualizovat na pozadi, i kdyz je prislusna vrstva skryta; po opetovnem zapnuti
 je proto vrstva ihned dostupna.
 
+## Tydenni plan podsviceni
+
+Na hlavni webove strance je tabulka pro pondeli az nedeli. Pro kazdy den lze
+nastavit:
+
+- zda je den aktivni,
+- cas zapnuti podsviceni,
+- cas vypnuti podsviceni.
+
+Vychozi plan je kazdy den `06:00-23:00`. Interval muze prechazet pres pulnoc,
+napriklad `18:00-02:00`. Stejny cas Od a Do znamena podsviceni zapnute po cely
+den. Vypnuty den nema bezny aktivni interval.
+
+Mimo nastaveny interval se vypne pouze podsviceni. ESP32, radar, ADS-B, pocasi
+i webovy server dale pracuji. Dotyk zhasnuteho displeje podsviceni zapne na
+60 sekund. Prvni dotyk zachyti neviditelna prekryvna vrstva, takze soucasne
+nezmeni zoom mapy ani nestiskne skryte tlacitko. Po minute se podsviceni znovu
+vypne, pokud mezitim nezacal aktivni interval.
+
+Plan pouziva mistni cas `Europe/Prague` pres pravidlo
+`CET-1CEST,M3.5.0/2,M10.5.0/3`. Dokud neni NTP synchronizovano, podsviceni
+zustava zapnute.
+
 ## Zvyrazneni tri letounu
 
 Lze ulozit tri nezavisle identifikatory. Kazdy muze byt:
@@ -116,6 +152,8 @@ Do NVS se uklada:
 - stav radarove a ADS-B vrstvy,
 - zapnuti zvyrazneni,
 - tri callsigny nebo ICAO identifikatory,
+- zapnuti tydenniho planu podsviceni,
+- aktivni dny a casy Od/Do pro pondeli az nedeli,
 - posledni vyrez mapy.
 
 Firmware automaticky prevede puvodni jeden sledovany letoun z verze 0.18.0 do
@@ -161,10 +199,20 @@ vychozi hodnoty WU a ADS-B.
 
 ## Diagnostika
 
+Webova diagnosticka stranka je dostupna na:
+
+```text
+http://IP_ZARIZENI/diagnostics
+```
+
+Zobrazuje stav site, pameti, PSRAM, casu/NTP, radaru, ADS-B, pocasi, astronomickych dat, prekreslovani mapy, poctu obnov RGB DMA a stav podsviceni vcetne aktivniho planu a zbyvajici doby docasneho probuzeni. Data se automaticky obnovuji po 5 sekundach. JSON je dostupny na `/api/diagnostics`.
+
+Horni lista displeje zobrazuje mistni cas a datum. Firmware pouziva POSIX zonu `CET-1CEST,M3.5.0/2,M10.5.0/3`, takze prechod mezi zimnim a letnim casem je automaticky.
+
 Heartbeat obsahuje stav vrstev a tri alerty:
 
 ```text
-HEARTBEAT ms=120000 WiFi=1 AP=0 heap=138 kB forecast=Open-Meteo cards=6 layers=R1/A1 alerts=on [CSA123|4B1812|RYR45]
+HEARTBEAT ms=120000 WiFi=1 AP=0 heap=138 kB forecast=Open-Meteo cards=6 layers=R1/A1 alerts=on [CSA123|4B1812|RYR45] BL=1 schedule=1 wake=0
 ```
 
 Dulezite zpravy:
@@ -204,3 +252,7 @@ src/map_renderer.*           mapa, vrstvy a zvyraznene symboly
 src/ui.*                     LVGL obrazovka a dotyk
 src/main.cpp                 inicializace a planovani uloh
 ```
+
+## PlatformIO build cache
+
+Version 0.20.2 can restore the RGB bounce buffer from a value left by an older firmware release (for example 30 scanlines from v0.20.0) back to 20 scanlines. The pre-build patch no longer aborts compilation if the installed display library changes its file layout.

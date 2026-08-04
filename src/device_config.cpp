@@ -4,6 +4,8 @@
 #include <Preferences.h>
 #include <WiFi.h>
 #include <ctype.h>
+#include <esp_heap_caps.h>
+#include <esp_system.h>
 
 #include "config.h"
 #include "debug_log.h"
@@ -55,11 +57,66 @@ bool urlLooksValid(const String& value) {
 
 String boolJson(bool value) { return value ? String("true") : String("false"); }
 
+String jsonEscape(const char* value) {
+  String escaped;
+  if (!value) return escaped;
+  escaped.reserve(strlen(value) + 16);
+  for (const char* p = value; *p; ++p) {
+    const unsigned char c = static_cast<unsigned char>(*p);
+    switch (c) {
+      case '\\': escaped += F("\\\\"); break;
+      case '"': escaped += F("\\\""); break;
+      case '\n': escaped += F("\\n"); break;
+      case '\r': escaped += F("\\r"); break;
+      case '\t': escaped += F("\\t"); break;
+      default:
+        if (c >= 0x20) escaped += static_cast<char>(c);
+        break;
+    }
+  }
+  return escaped;
+}
+
+int64_t ageMs(uint32_t now, uint32_t lastUpdate) {
+  if (lastUpdate == 0) return -1;
+  return static_cast<uint32_t>(now - lastUpdate);
+}
+
+
 const char* layerSummary(bool radar, bool adsb) {
   if (radar && adsb) return "radar + ADS-B";
   if (radar) return "jen radar";
   if (adsb) return "jen ADS-B";
   return "bez radaru a ADS-B";
+}
+
+constexpr const char* kBacklightDayNames[BACKLIGHT_DAY_COUNT] = {
+    "Pondeli", "Utery", "Streda", "Ctvrtek",
+    "Patek", "Sobota", "Nedele"};
+
+bool parseTimeMinutes(String value, uint16_t& minutes) {
+  value.trim();
+  if (value.length() != 5 || value[2] != ':') return false;
+  if (!isdigit(static_cast<unsigned char>(value[0])) ||
+      !isdigit(static_cast<unsigned char>(value[1])) ||
+      !isdigit(static_cast<unsigned char>(value[3])) ||
+      !isdigit(static_cast<unsigned char>(value[4]))) {
+    return false;
+  }
+  const int hour = (value[0] - '0') * 10 + (value[1] - '0');
+  const int minute = (value[3] - '0') * 10 + (value[4] - '0');
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return false;
+  minutes = static_cast<uint16_t>(hour * 60 + minute);
+  return true;
+}
+
+String formatTimeMinutes(uint16_t minutes) {
+  minutes %= 24U * 60U;
+  char text[6];
+  snprintf(text, sizeof(text), "%02u:%02u",
+           static_cast<unsigned>(minutes / 60U),
+           static_cast<unsigned>(minutes % 60U));
+  return String(text);
 }
 }  // namespace
 
@@ -89,6 +146,24 @@ void DeviceConfigService::load() {
           preferences.getString("alert_id1", ""));
       settings_.aircraftAlertTargets[2] = normalizedAircraftTarget(
           preferences.getString("alert_id2", ""));
+      settings_.backlightScheduleEnabled =
+          preferences.getBool("bl_sched", true);
+      for (size_t day = 0; day < BACKLIGHT_DAY_COUNT; ++day) {
+        char key[16];
+        snprintf(key, sizeof(key), "bl_en%u", static_cast<unsigned>(day));
+        settings_.backlightDays[day].enabled =
+            preferences.getBool(key, true);
+        snprintf(key, sizeof(key), "bl_st%u", static_cast<unsigned>(day));
+        settings_.backlightDays[day].startMinutes =
+            preferences.getUShort(key, 6U * 60U);
+        snprintf(key, sizeof(key), "bl_end%u", static_cast<unsigned>(day));
+        settings_.backlightDays[day].endMinutes =
+            preferences.getUShort(key, 23U * 60U);
+        if (settings_.backlightDays[day].startMinutes >= 24U * 60U)
+          settings_.backlightDays[day].startMinutes = 6U * 60U;
+        if (settings_.backlightDays[day].endMinutes >= 24U * 60U)
+          settings_.backlightDays[day].endMinutes = 23U * 60U;
+      }
 
       DebugLog::printf("Config: restored for SSID '%s', layers=%s\n",
                        settings_.wifiSsid.c_str(),
@@ -113,8 +188,10 @@ void DeviceConfigService::load() {
   if (settings_.wuStationId.isEmpty()) settings_.wuStationId = "IPLZE179";
 }
 
-void DeviceConfigService::begin(const AircraftSnapshot* aircraftSnapshot) {
+void DeviceConfigService::begin(const AircraftSnapshot* aircraftSnapshot,
+                                const RuntimeDiagnostics* runtimeDiagnostics) {
   aircraftSnapshot_ = aircraftSnapshot;
+  runtimeDiagnostics_ = runtimeDiagnostics;
   WiFi.persistent(false);
   WiFi.setHostname(Config::CONFIG_HOSTNAME);
 
@@ -223,7 +300,11 @@ void DeviceConfigService::startWebServer() {
   server_.on("/factory-reset", HTTP_POST,
              [this]() { handleFactoryReset(); });
   server_.on("/reboot", HTTP_POST, [this]() { handleReboot(); });
+  server_.on("/lcd-resync", HTTP_POST, [this]() { handleLcdResync(); });
   server_.on("/api/status", HTTP_GET, [this]() { handleStatusJson(); });
+  server_.on("/diagnostics", HTTP_GET, [this]() { handleDiagnostics(); });
+  server_.on("/api/diagnostics", HTTP_GET,
+             [this]() { handleDiagnosticsJson(); });
 
   // Common captive-portal detection URLs.
   server_.on("/generate_204", HTTP_ANY,
@@ -303,6 +384,12 @@ bool DeviceConfigService::consumeRuntimeSettingsChanged() {
   return changed;
 }
 
+bool DeviceConfigService::consumeLcdResyncRequested() {
+  const bool requested = lcdResyncRequested_;
+  lcdResyncRequested_ = false;
+  return requested;
+}
+
 bool DeviceConfigService::saveSettings() {
   Preferences preferences;
   if (!preferences.begin(kPreferencesNamespace, false)) return false;
@@ -321,6 +408,16 @@ bool DeviceConfigService::saveSettings() {
   preferences.putString("alert_id0", settings_.aircraftAlertTargets[0]);
   preferences.putString("alert_id1", settings_.aircraftAlertTargets[1]);
   preferences.putString("alert_id2", settings_.aircraftAlertTargets[2]);
+  preferences.putBool("bl_sched", settings_.backlightScheduleEnabled);
+  for (size_t day = 0; day < BACKLIGHT_DAY_COUNT; ++day) {
+    char key[16];
+    snprintf(key, sizeof(key), "bl_en%u", static_cast<unsigned>(day));
+    preferences.putBool(key, settings_.backlightDays[day].enabled);
+    snprintf(key, sizeof(key), "bl_st%u", static_cast<unsigned>(day));
+    preferences.putUShort(key, settings_.backlightDays[day].startMinutes);
+    snprintf(key, sizeof(key), "bl_end%u", static_cast<unsigned>(day));
+    preferences.putUShort(key, settings_.backlightDays[day].endMinutes);
+  }
   preferences.end();
   return ok;
 }
@@ -345,7 +442,7 @@ bool DeviceConfigService::alertTargetPresent(size_t slot) const {
 
 String DeviceConfigService::buildPage() const {
   String page;
-  page.reserve(26000);
+  page.reserve(32000);
   page += F("<!doctype html><html lang='cs'><head><meta charset='utf-8'>");
   page += F("<meta name='viewport' content='width=device-width,initial-scale=1'>");
   page += F("<title>Radar ADS-B nastaveni</title><style>");
@@ -353,14 +450,14 @@ String DeviceConfigService::buildPage() const {
   page += F("main{max-width:820px;margin:auto}.card{background:#102433;border:1px solid #29495c;border-radius:12px;padding:16px;margin-bottom:14px}");
   page += F("h1{font-size:24px;margin:0 0 8px}h2{font-size:18px;margin:0 0 12px;color:#8bd5ff}");
   page += F("label{display:block;margin:12px 0 5px}input,select{width:100%;box-sizing:border-box;padding:11px;border-radius:8px;border:1px solid #456275;background:#071923;color:#fff}");
-  page += F("input[type=checkbox]{width:auto;margin-right:8px}.row{display:grid;grid-template-columns:1fr 1fr;gap:12px}.three{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}");
-  page += F("button{background:#1976a8;color:white;border:0;border-radius:8px;padding:11px 16px;font-size:15px;cursor:pointer}.small{padding:8px 10px;margin:8px 5px 0 0}.danger{background:#a83a3a}.muted{color:#a7bac5;font-size:13px}.ok{color:#6ee7a5}.warn{color:#ffd166}");
-  page += F("code{background:#071923;padding:2px 5px;border-radius:4px}@media(max-width:700px){.row,.three{grid-template-columns:1fr}}</style></head><body><main>");
+  page += F("input[type=checkbox]{width:auto;margin-right:8px}.row{display:grid;grid-template-columns:1fr 1fr;gap:12px}.three{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}.schedule{width:100%;border-collapse:collapse}.schedule th,.schedule td{padding:7px;border-bottom:1px solid #29495c;text-align:left}.schedule input[type=time]{min-width:120px}");
+  page += F("button{background:#1976a8;color:white;border:0;border-radius:8px;padding:11px 16px;font-size:15px;cursor:pointer}.small{padding:8px 10px;margin:8px 5px 0 0}.nav{display:inline-block;background:#214f68;color:#fff;text-decoration:none;border-radius:8px;padding:9px 13px}.danger{background:#a83a3a}.muted{color:#a7bac5;font-size:13px}.ok{color:#6ee7a5}.warn{color:#ffd166}");
+  page += F("code{background:#071923;padding:2px 5px;border-radius:4px}@media(max-width:700px){.row,.three{grid-template-columns:1fr}.schedule{font-size:13px}.schedule input[type=time]{min-width:92px;padding:8px}}</style></head><body><main>");
   page += F("<h1>Radar CR + ADS-B</h1><p class='muted'>Firmware ");
   page += htmlEscape(FW_VERSION);
-  page += F("</p><section class='card'><h2>Stav a pristup</h2><p>Sit: <strong>");
+  page += F("</p><p><a class='nav' href='/diagnostics'>Diagnostika zarizeni</a></p><section class='card'><h2>Stav a pristup</h2><p>Sit: <strong>");
   page += htmlEscape(networkLabel());
-  page += F("</strong></p><p>Konfigurace v domaci siti: <code>");
+  page += F("</strong></p><p><a class='nav' href='/diagnostics'>Otevrit diagnostiku</a></p><p>Konfigurace v domaci siti: <code>");
   page += htmlEscape(accessUrl());
   page += F("</code> nebo <code>http://");
   page += htmlEscape(Config::CONFIG_HOSTNAME);
@@ -395,6 +492,28 @@ String DeviceConfigService::buildPage() const {
   page += F(">Zobrazit radarovou vrstvu</label><label><input type='checkbox' name='layer_adsb' value='1'");
   if (settings_.adsbLayerEnabled) page += F(" checked");
   page += F(">Zobrazit letouny ADS-B</label><p class='muted'>Lze zvolit radar + ADS-B, jen radar, jen ADS-B nebo obe vrstvy vypnout. Zmena se po ulozeni projevi bez restartu.</p></section>");
+
+  page += F("<section class='card'><h2>Plan podsviceni</h2><label><input type='checkbox' name='bl_schedule' value='1'");
+  if (settings_.backlightScheduleEnabled) page += F(" checked");
+  page += F(">Ridit podsviceni podle tydenniho planu</label><table class='schedule'><thead><tr><th>Den</th><th>Aktivni</th><th>Od</th><th>Do</th></tr></thead><tbody>");
+  for (size_t day = 0; day < BACKLIGHT_DAY_COUNT; ++day) {
+    page += F("<tr><td>");
+    page += kBacklightDayNames[day];
+    page += F("</td><td><input type='checkbox' name='bl_day_");
+    page += String(day);
+    page += F("' value='1'");
+    if (settings_.backlightDays[day].enabled) page += F(" checked");
+    page += F("></td><td><input type='time' name='bl_start_");
+    page += String(day);
+    page += F("' required value='");
+    page += formatTimeMinutes(settings_.backlightDays[day].startMinutes);
+    page += F("'></td><td><input type='time' name='bl_end_");
+    page += String(day);
+    page += F("' required value='");
+    page += formatTimeMinutes(settings_.backlightDays[day].endMinutes);
+    page += F("'></td></tr>");
+  }
+  page += F("</tbody></table><p class='muted'>Mimo aktivni interval se vypne pouze podsviceni; radar, ADS-B a web dale pracuji. Prvni dotyk displej probudi na 1 minutu a neprovede zadnou jinou akci. Interval muze prechazet pres pulnoc, napriklad 18:00-02:00. Stejny cas Od a Do znamena zapnuto po cely den. Vypnuty den je dostupny jen docasnym probuzenim dotykem.</p></section>");
 
   page += F("<section class='card'><h2>Zvyrazneni az tri letounu</h2><label><input type='checkbox' name='alert_enabled' value='1'");
   if (settings_.aircraftAlertEnabled) page += F(" checked");
@@ -448,14 +567,166 @@ String DeviceConfigService::buildPage() const {
   page += htmlEscape(settings_.wuStationId);
   page += F("'></div><div><label for='wu_key'>Novy WU API klic</label><input id='wu_key' name='wu_key' type='password' maxlength='96' placeholder='Prazdne = zachovat ulozeny klic'></div></div><p class='muted'>Predpoved Open-Meteo funguje i bez WU klice.</p></section>");
 
-  page += F("<button type='submit'>Ulozit nastaveni</button></form><section class='card' style='margin-top:14px'><h2>Servis</h2><form method='post' action='/reboot' style='display:inline'><button type='submit'>Restart</button></form> <form method='post' action='/factory-reset' style='display:inline'><button type='submit' class='danger'>Smazat nastaveni</button></form></section>");
+  page += F("<button type='submit'>Ulozit nastaveni</button></form><section class='card' style='margin-top:14px'><h2>Servis</h2><form method='post' action='/lcd-resync' style='display:inline'><button type='submit'>Srovnat LCD</button></form> <form method='post' action='/reboot' style='display:inline'><button type='submit'>Restart</button></form> <form method='post' action='/factory-reset' style='display:inline'><button type='submit' class='danger'>Smazat nastaveni</button></form><p class='muted'>Srovnani LCD se provede pouze rucne; firmware nespousti periodicky restart RGB DMA.</p></section>");
   page += F("<script>const s=document.getElementById('aircraft_now');document.querySelectorAll('.assign').forEach(b=>b.addEventListener('click',()=>{if(s.value)document.getElementById('alert_target_'+b.dataset.slot).value=s.value;}));</script></main></body></html>");
+  return page;
+}
+
+String DeviceConfigService::buildDiagnosticsPage() const {
+  String page;
+  page.reserve(17000);
+  page += F("<!doctype html><html lang='cs'><head><meta charset='utf-8'>");
+  page += F("<meta name='viewport' content='width=device-width,initial-scale=1'>");
+  page += F("<title>Diagnostika Radar ADS-B</title><style>");
+  page += F("body{font-family:Arial,sans-serif;background:#07131c;color:#e8f1f5;margin:0;padding:18px}main{max-width:980px;margin:auto}");
+  page += F("h1{margin:0 0 6px;font-size:25px}h2{margin:0 0 10px;color:#8bd5ff;font-size:18px}.muted{color:#9fb4c1}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.card{background:#102433;border:1px solid #29495c;border-radius:12px;padding:16px}.wide{grid-column:1/-1}table{width:100%;border-collapse:collapse}td{padding:7px 4px;border-bottom:1px solid #203c4d;vertical-align:top}td:first-child{color:#a9bdc8;width:43%}.value{font-family:Consolas,monospace;overflow-wrap:anywhere}.ok{color:#6ee7a5}.warn{color:#ffd166}.bad{color:#ff8b8b}.nav{display:inline-block;background:#1976a8;color:#fff;text-decoration:none;border-radius:8px;padding:10px 14px;margin:8px 8px 14px 0}button{background:#214f68;color:#fff;border:0;border-radius:8px;padding:10px 14px;cursor:pointer}@media(max-width:760px){.grid{grid-template-columns:1fr}.wide{grid-column:auto}}</style></head><body><main>");
+  page += F("<h1>Diagnostika zarizeni</h1><p class='muted'>Automaticka obnova kazdych 5 sekund</p><a class='nav' href='/'>Nastaveni</a><a class='nav' href='/api/diagnostics'>JSON API</a><button onclick='loadData()'>Obnovit</button><div class='grid'>");
+  page += F("<section class='card'><h2>System a cas</h2><table><tr><td>Firmware</td><td id='firmware' class='value'>--</td></tr><tr><td>Mistni cas</td><td id='local_datetime' class='value'>--</td></tr><tr><td>Casova zona</td><td id='timezone' class='value'>--</td></tr><tr><td>NTP synchronizace</td><td id='time_sync'>--</td></tr><tr><td>Doba behu</td><td id='uptime'>--</td></tr><tr><td>CPU</td><td id='cpu'>--</td></tr><tr><td>Flash</td><td id='flash'>--</td></tr><tr><td>Duvod restartu</td><td id='reset_reason'>--</td></tr></table></section>");
+  page += F("<section class='card'><h2>Pamet</h2><table><tr><td>Volna heap</td><td id='heap_free'>--</td></tr><tr><td>Minimum heap</td><td id='heap_min'>--</td></tr><tr><td>Nejvetsi heap blok</td><td id='heap_largest'>--</td></tr><tr><td>Volna PSRAM</td><td id='psram_free'>--</td></tr><tr><td>Minimum PSRAM</td><td id='psram_min'>--</td></tr><tr><td>Nejvetsi PSRAM blok</td><td id='psram_largest'>--</td></tr></table></section>");
+  page += F("<section class='card'><h2>Sit</h2><table><tr><td>Rezim</td><td id='network_mode'>--</td></tr><tr><td>SSID</td><td id='ssid' class='value'>--</td></tr><tr><td>IP adresa</td><td id='ip' class='value'>--</td></tr><tr><td>Signal</td><td id='rssi'>--</td></tr><tr><td>Hostname</td><td id='hostname' class='value'>--</td></tr><tr><td>Konfiguracni AP</td><td id='portal'>--</td></tr></table></section>");
+  page += F("<section class='card'><h2>Displej a mapa</h2><table><tr><td>Rozliseni</td><td>800 x 480</td></tr><tr><td>Podsviceni</td><td id='backlight_state'>--</td></tr><tr><td>Tydenni plan</td><td id='backlight_schedule'>--</td></tr><tr><td>Docasne probuzeni</td><td id='backlight_wake'>--</td></tr><tr><td>Vyrez mapy</td><td id='map_view'>--</td></tr><tr><td>Prekresleni mapy</td><td id='map_redraws'>--</td></tr><tr><td>Posledni kresleni</td><td id='map_duration'>--</td></tr><tr><td>Srovnani RGB DMA</td><td id='lcd_resyncs'>--</td></tr><tr><td>Od posledniho srovnani</td><td id='lcd_age'>--</td></tr></table></section>");
+  page += F("<section class='card wide'><h2>Datove zdroje</h2><table><tr><td>Radar</td><td id='radar_status' class='value'>--</td></tr><tr><td>Radarove snimky</td><td id='radar_frames'>--</td></tr><tr><td>Stari aktualizace radaru</td><td id='radar_age'>--</td></tr><tr><td>ADS-B</td><td id='adsb_status' class='value'>--</td></tr><tr><td>Pocet letounu</td><td id='aircraft_count'>--</td></tr><tr><td>Stari ADS-B dat</td><td id='adsb_age'>--</td></tr><tr><td>Aktualni pocasi</td><td id='weather_status' class='value'>--</td></tr><tr><td>Stari pocasi</td><td id='weather_age'>--</td></tr><tr><td>Predpoved</td><td id='forecast_status' class='value'>--</td></tr><tr><td>Stari predpovedi</td><td id='forecast_age'>--</td></tr><tr><td>Astronomie</td><td id='astronomy_status' class='value'>--</td></tr><tr><td>Stari astronomie</td><td id='astronomy_age'>--</td></tr></table></section>");
+  page += F("<section class='card wide'><h2>Nastaveni zobrazeni</h2><table><tr><td>Vrstvy</td><td id='layers'>--</td></tr><tr><td>Zvyrazneni letounu</td><td id='alerts'>--</td></tr></table></section></div><p id='refresh_state' class='muted'>Nacitam...</p>");
+  page += F("<script>const $=id=>document.getElementById(id);const kb=v=>Math.round(v/1024)+' kB';const age=v=>v<0?'dosud neprovedeno':v<1000?v+' ms':v<60000?Math.round(v/1000)+' s':v<3600000?Math.round(v/60000)+' min':(v/3600000).toFixed(1)+' h';const up=v=>{let s=Math.floor(v/1000),d=Math.floor(s/86400);s%=86400;let h=Math.floor(s/3600);s%=3600;let m=Math.floor(s/60);return (d?d+' d ':'')+h+' h '+m+' min'};const yes=(v,a='ano',n='ne')=>v?'<span class=ok>'+a+'</span>':'<span class=warn>'+n+'</span>';async function loadData(){try{const r=await fetch('/api/diagnostics',{cache:'no-store'});if(!r.ok)throw Error(r.status);const d=await r.json();$('firmware').textContent=d.firmware;$('local_datetime').textContent=d.local_date+' '+d.local_time;$('timezone').textContent=d.timezone+' (automaticky CET/CEST)';$('time_sync').innerHTML=yes(d.time_synchronized,'synchronizovano','ceka na NTP');$('uptime').textContent=up(d.uptime_ms);$('cpu').textContent=d.cpu_mhz+' MHz / '+d.cpu_cores+' jadra';$('flash').textContent=kb(d.flash_bytes);$('reset_reason').textContent=d.reset_reason;$('heap_free').textContent=kb(d.heap_free);$('heap_min').textContent=kb(d.heap_min);$('heap_largest').textContent=kb(d.heap_largest);$('psram_free').textContent=kb(d.psram_free);$('psram_min').textContent=kb(d.psram_min);$('psram_largest').textContent=kb(d.psram_largest);$('network_mode').textContent=d.network_mode;$('ssid').textContent=d.ssid||'--';$('ip').textContent=d.ip;$('rssi').textContent=d.wifi_connected?d.rssi_dbm+' dBm':'--';$('hostname').textContent=d.hostname+'.local';$('portal').innerHTML=yes(d.portal_active,'aktivni','vypnuty');$('backlight_state').innerHTML=yes(d.backlight_on,'zapnuto','vypnuto');$('backlight_schedule').textContent=d.backlight_schedule_enabled?(d.backlight_window_active?'aktivni interval':'mimo aktivni interval'):'plan vypnut';$('backlight_wake').textContent=d.backlight_temporary_wake?Math.ceil(d.backlight_wake_remaining_ms/1000)+' s':'neaktivni';$('map_view').textContent=d.map_view;$('map_redraws').textContent=d.map_redraw_count;$('map_duration').textContent=d.last_map_redraw_ms+' ms';$('lcd_resyncs').textContent=d.lcd_resync_count;$('lcd_age').textContent=age(d.lcd_resync_age_ms);$('radar_status').textContent=d.radar_status;$('radar_frames').textContent=(d.radar_frame_count?(d.current_radar_frame+1)+' / '+d.radar_frame_count:'0 / 0')+' | cache '+(d.radar_cache_ready?'OK':'nepripravena');$('radar_age').textContent=age(d.radar_age_ms);$('adsb_status').textContent=d.adsb_status;$('aircraft_count').textContent=d.aircraft_count;$('adsb_age').textContent=age(d.adsb_age_ms);$('weather_status').textContent=d.weather_status+' | data '+(d.current_weather_valid?'OK':'chybi');$('weather_age').textContent=age(d.weather_age_ms);$('forecast_status').textContent=d.forecast_product+' | '+d.forecast_slot_count+' karet | '+(d.forecast_valid?'OK':'chyba');$('forecast_age').textContent=age(d.forecast_age_ms);$('astronomy_status').textContent=d.astronomy_status+' | '+(d.astronomy_valid?'OK':'chyba');$('astronomy_age').textContent=age(d.astronomy_age_ms);$('layers').textContent='Radar '+(d.radar_layer?'zapnut':'vypnut')+' | ADS-B '+(d.adsb_layer?'zapnuto':'vypnuto');$('alerts').textContent=d.alert_enabled?d.alert_targets.filter(Boolean).join(' | '):'vypnuto';$('refresh_state').textContent='Aktualizovano '+new Date().toLocaleTimeString();}catch(e){$('refresh_state').innerHTML='<span class=bad>Diagnostiku se nepodarilo nacist: '+e+'</span>';}}loadData();setInterval(loadData,5000);</script></main></body></html>");
   return page;
 }
 
 void DeviceConfigService::handleRoot() {
   server_.sendHeader("Cache-Control", "no-store");
   server_.send(200, "text/html; charset=utf-8", buildPage());
+}
+
+void DeviceConfigService::handleDiagnostics() {
+  server_.sendHeader("Cache-Control", "no-store");
+  server_.send(200, "text/html; charset=utf-8", buildDiagnosticsPage());
+}
+
+void DeviceConfigService::handleDiagnosticsJson() {
+  const uint32_t now = millis();
+  const RuntimeDiagnostics emptyDiagnostics;
+  const RuntimeDiagnostics& diagnostics =
+      runtimeDiagnostics_ ? *runtimeDiagnostics_ : emptyDiagnostics;
+
+  String json;
+  json.reserve(3500);
+  json += F("{\"firmware\":\"");
+  json += FW_VERSION;
+  json += F("\",\"uptime_ms\":");
+  json += String(diagnostics.uptimeMs);
+  json += F(",\"local_time\":\"");
+  json += jsonEscape(diagnostics.localTime);
+  json += F("\",\"local_date\":\"");
+  json += jsonEscape(diagnostics.localDate);
+  json += F("\",\"timezone\":\"");
+  json += jsonEscape(diagnostics.timezone);
+  json += F("\",\"time_synchronized\":");
+  json += boolJson(diagnostics.timeSynchronized);
+  json += F(",\"cpu_mhz\":");
+  json += String(getCpuFrequencyMhz());
+  json += F(",\"cpu_cores\":");
+  json += String(ESP.getChipCores());
+  json += F(",\"flash_bytes\":");
+  json += String(ESP.getFlashChipSize());
+  json += F(",\"reset_reason\":");
+  json += String(static_cast<int>(esp_reset_reason()));
+  json += F(",\"heap_free\":");
+  json += String(ESP.getFreeHeap());
+  json += F(",\"heap_min\":");
+  json += String(ESP.getMinFreeHeap());
+  json += F(",\"heap_largest\":");
+  json += String(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+  json += F(",\"psram_free\":");
+  json += String(heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+  json += F(",\"psram_min\":");
+  json += String(heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM));
+  json += F(",\"psram_largest\":");
+  json += String(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+  json += F(",\"wifi_connected\":");
+  json += boolJson(stationConnected());
+  json += F(",\"portal_active\":");
+  json += boolJson(portalActive_);
+  json += F(",\"network_mode\":\"");
+  json += stationConnected() ? (portalActive_ ? "AP + domaci Wi-Fi" : "domaci Wi-Fi") : (portalActive_ ? "konfiguracni AP" : "offline");
+  json += F("\",\"ssid\":\"");
+  json += jsonEscape(stationConnected() ? WiFi.SSID().c_str() : accessPointSsid_.c_str());
+  json += F("\",\"ip\":\"");
+  json += stationConnected() ? WiFi.localIP().toString() : WiFi.softAPIP().toString();
+  json += F("\",\"rssi_dbm\":");
+  json += String(stationConnected() ? WiFi.RSSI() : 0);
+  json += F(",\"hostname\":\"");
+  json += Config::CONFIG_HOSTNAME;
+  json += F("\",\"radar_status\":\"");
+  json += jsonEscape(diagnostics.radarStatus);
+  json += F("\",\"radar_frame_count\":");
+  json += String(diagnostics.radarFrameCount);
+  json += F(",\"current_radar_frame\":");
+  json += String(diagnostics.currentRadarFrame);
+  json += F(",\"radar_cache_ready\":");
+  json += boolJson(diagnostics.radarCacheReady);
+  json += F(",\"radar_age_ms\":");
+  json += String(ageMs(now, diagnostics.lastRadarUpdateMs));
+  json += F(",\"adsb_status\":\"");
+  json += jsonEscape(diagnostics.adsbStatus);
+  json += F("\",\"aircraft_count\":");
+  json += String(static_cast<unsigned>(diagnostics.aircraftCount));
+  json += F(",\"adsb_age_ms\":");
+  json += String(ageMs(now, diagnostics.lastAdsbUpdateMs));
+  json += F(",\"weather_status\":\"");
+  json += jsonEscape(diagnostics.weatherStatus);
+  json += F("\",\"current_weather_valid\":");
+  json += boolJson(diagnostics.currentWeatherValid);
+  json += F(",\"weather_age_ms\":");
+  json += String(ageMs(now, diagnostics.lastCurrentWeatherUpdateMs));
+  json += F(",\"forecast_valid\":");
+  json += boolJson(diagnostics.forecastValid);
+  json += F(",\"forecast_product\":\"");
+  json += jsonEscape(diagnostics.forecastProduct);
+  json += F("\",\"forecast_slot_count\":");
+  json += String(diagnostics.forecastSlotCount);
+  json += F(",\"forecast_age_ms\":");
+  json += String(ageMs(now, diagnostics.lastForecastUpdateMs));
+  json += F(",\"astronomy_status\":\"");
+  json += jsonEscape(diagnostics.astronomyStatus);
+  json += F("\",\"astronomy_valid\":");
+  json += boolJson(diagnostics.astronomyValid);
+  json += F(",\"astronomy_age_ms\":");
+  json += String(ageMs(now, diagnostics.lastAstronomyUpdateMs));
+  json += F(",\"map_view\":\"");
+  json += jsonEscape(diagnostics.mapView);
+  json += F("\",\"map_redraw_count\":");
+  json += String(diagnostics.mapRedrawCount);
+  json += F(",\"last_map_redraw_ms\":");
+  json += String(diagnostics.lastMapRedrawDurationMs);
+  json += F(",\"lcd_resync_count\":");
+  json += String(diagnostics.lcdResyncCount);
+  json += F(",\"lcd_resync_age_ms\":");
+  json += String(ageMs(now, diagnostics.lastDisplaySyncRecoveryMs));
+  json += F(",\"backlight_on\":");
+  json += boolJson(diagnostics.backlightOn);
+  json += F(",\"backlight_schedule_enabled\":");
+  json += boolJson(diagnostics.backlightScheduleEnabled);
+  json += F(",\"backlight_window_active\":");
+  json += boolJson(diagnostics.backlightScheduledWindowActive);
+  json += F(",\"backlight_temporary_wake\":");
+  json += boolJson(diagnostics.backlightTemporaryWake);
+  json += F(",\"backlight_wake_remaining_ms\":");
+  json += String(diagnostics.backlightWakeRemainingMs);
+  json += F(",\"radar_layer\":");
+  json += boolJson(settings_.radarLayerEnabled);
+  json += F(",\"adsb_layer\":");
+  json += boolJson(settings_.adsbLayerEnabled);
+  json += F(",\"alert_enabled\":");
+  json += boolJson(settings_.aircraftAlertEnabled);
+  json += F(",\"alert_targets\":[");
+  for (size_t slot = 0; slot < AIRCRAFT_ALERT_SLOT_COUNT; ++slot) {
+    if (slot) json += ',';
+    json += '"';
+    json += jsonEscape(settings_.aircraftAlertTargets[slot].c_str());
+    json += '"';
+  }
+  json += F("]}");
+  server_.sendHeader("Cache-Control", "no-store");
+  server_.send(200, "application/json; charset=utf-8", json);
 }
 
 void DeviceConfigService::handleSave() {
@@ -475,6 +746,22 @@ void DeviceConfigService::handleSave() {
   for (size_t slot = 0; slot < AIRCRAFT_ALERT_SLOT_COUNT; ++slot) {
     const String argument = String("alert_target_") + String(slot + 1);
     newAlertTargets[slot] = normalizedAircraftTarget(server_.arg(argument));
+  }
+  const bool newBacklightScheduleEnabled = server_.hasArg("bl_schedule");
+  BacklightDaySchedule newBacklightDays[BACKLIGHT_DAY_COUNT];
+  for (size_t day = 0; day < BACKLIGHT_DAY_COUNT; ++day) {
+    newBacklightDays[day].enabled =
+        server_.hasArg(String("bl_day_") + String(day));
+    const String startArgument = String("bl_start_") + String(day);
+    const String endArgument = String("bl_end_") + String(day);
+    if (!parseTimeMinutes(server_.arg(startArgument),
+                          newBacklightDays[day].startMinutes) ||
+        !parseTimeMinutes(server_.arg(endArgument),
+                          newBacklightDays[day].endMinutes)) {
+      sendErrorPage(String("Neplatny cas podsviceni pro den ") +
+                    kBacklightDayNames[day] + ".");
+      return;
+    }
   }
 
   if (newSsid.isEmpty()) {
@@ -508,6 +795,10 @@ void DeviceConfigService::handleSave() {
   settings_.aircraftAlertEnabled = newAlertEnabled;
   for (size_t slot = 0; slot < AIRCRAFT_ALERT_SLOT_COUNT; ++slot) {
     settings_.aircraftAlertTargets[slot] = newAlertTargets[slot];
+  }
+  settings_.backlightScheduleEnabled = newBacklightScheduleEnabled;
+  for (size_t day = 0; day < BACKLIGHT_DAY_COUNT; ++day) {
+    settings_.backlightDays[day] = newBacklightDays[day];
   }
 
   if (!saveSettings()) {
@@ -557,6 +848,13 @@ void DeviceConfigService::handleReboot() {
                "<!doctype html><meta charset='utf-8'><meta name='viewport' content='width=device-width'><style>body{font-family:Arial;background:#07131c;color:white;padding:30px}</style><h1>Restart</h1><p>Zarizeni se restartuje.</p>");
   restartPending_ = true;
   restartAt_ = millis() + 800;
+}
+
+void DeviceConfigService::handleLcdResync() {
+  lcdResyncRequested_ = true;
+  DebugLog::println("Config: manual LCD resync requested");
+  server_.sendHeader("Location", "/", true);
+  server_.send(303, "text/plain", "LCD resync scheduled");
 }
 
 void DeviceConfigService::handleStatusJson() {

@@ -3,6 +3,7 @@
 #include <WiFi.h>
 #include <esp_heap_caps.h>
 #include <math.h>
+#include <time.h>
 
 #include "config.h"
 
@@ -21,7 +22,9 @@ uint8_t gFrontMap = 0;
 uint8_t gBackMap = 1;
 bool gDoubleBufferedMap = false;
 
+lv_obj_t* gClockLabel = nullptr;
 lv_obj_t* gHeaderLabel = nullptr;
+lv_obj_t* gBacklightWakeOverlay = nullptr;
 lv_obj_t* gPauseLabel = nullptr;
 lv_obj_t* gCurrentTemp = nullptr;
 lv_obj_t* gCurrentDetail1 = nullptr;
@@ -44,6 +47,7 @@ volatile bool gManualRefresh = false;
 volatile bool gMapTapPending = false;
 volatile int16_t gMapTapX = 0;
 volatile int16_t gMapTapY = 0;
+volatile bool gBacklightWakeRequested = false;
 
 void applyPanelStyle(lv_obj_t* object, uint32_t background, int radius = 0,
                      uint32_t borderColor = 0, int borderWidth = 0) {
@@ -205,6 +209,11 @@ void pauseEvent(lv_event_t*) {
 
 void refreshEvent(lv_event_t*) { gManualRefresh = true; }
 
+void backlightWakeEvent(lv_event_t* event) {
+  if (!event || lv_event_get_code(event) != LV_EVENT_RELEASED) return;
+  gBacklightWakeRequested = true;
+}
+
 void mapTapEvent(lv_event_t* event) {
   if (!event || lv_event_get_code(event) != LV_EVENT_CLICKED) return;
   lv_obj_t* target = lv_event_get_target(event);
@@ -287,8 +296,8 @@ bool begin() {
   lv_obj_set_pos(header, 0, 0);
   lv_obj_set_size(header, Config::SCREEN_W, Config::HEADER_H);
   applyPanelStyle(header, kHeaderBg, 0, 0x1E3849, 1);
-  makeLabel(header, 10, 7, 210, "RADAR CR + ADS-B",
-            &lv_font_montserrat_16, 0xF2F7FA);
+  gClockLabel = makeLabel(header, 10, 7, 205, "--:--:--  --.--.----",
+                          &lv_font_montserrat_16, 0xF2F7FA);
   gHeaderLabel = makeLabel(header, 220, 10, 420, "Inicializace...",
                            &lv_font_montserrat_12, 0xAFC4D1);
   makeButton(header, 646, 70, 0x176B9A, "PAUZA", pauseEvent, &gPauseLabel);
@@ -379,6 +388,21 @@ bool begin() {
                                  LV_TEXT_ALIGN_RIGHT);
     drawIcon(i, 44);
   }
+
+  // Invisible full-screen overlay is enabled only while the scheduled
+  // backlight is off. It consumes the first touch so waking the display does
+  // not also zoom the map or press a hidden button.
+  gBacklightWakeOverlay = lv_obj_create(screen);
+  lv_obj_set_pos(gBacklightWakeOverlay, 0, 0);
+  lv_obj_set_size(gBacklightWakeOverlay, Config::SCREEN_W, Config::SCREEN_H);
+  lv_obj_set_style_bg_opa(gBacklightWakeOverlay, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(gBacklightWakeOverlay, 0, 0);
+  lv_obj_set_style_pad_all(gBacklightWakeOverlay, 0, 0);
+  lv_obj_clear_flag(gBacklightWakeOverlay, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(gBacklightWakeOverlay, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(gBacklightWakeOverlay, backlightWakeEvent,
+                      LV_EVENT_RELEASED, nullptr);
+  lv_obj_add_flag(gBacklightWakeOverlay, LV_OBJ_FLAG_HIDDEN);
 
   return true;
 }
@@ -478,6 +502,16 @@ void updateAstronomy(const AstronomySnapshot& astronomy) {
 
 void updateHeader(const char* networkStatus, const char* radarStatus,
                   const AircraftSnapshot& aircraft) {
+  char clockText[32] = "--:--:--  --.--.----";
+  const time_t epoch = time(nullptr);
+  if (epoch > 1700000000) {
+    struct tm localTime {};
+    localtime_r(&epoch, &localTime);
+    strftime(clockText, sizeof(clockText), "%H:%M:%S  %d.%m.%Y",
+             &localTime);
+  }
+  if (gClockLabel) lv_label_set_text(gClockLabel, clockText);
+
   char text[224];
   snprintf(text, sizeof(text), "%s  |  %s  |  %s",
            networkStatus && networkStatus[0] ? networkStatus : "Sit offline",
@@ -500,6 +534,22 @@ bool consumeMapTap(int16_t& x, int16_t& y) {
   y = gMapTapY;
   gMapTapPending = false;
   return true;
+}
+
+void setBacklightWakeOverlay(bool enabled) {
+  if (!gBacklightWakeOverlay) return;
+  if (enabled) {
+    lv_obj_clear_flag(gBacklightWakeOverlay, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(gBacklightWakeOverlay);
+  } else {
+    lv_obj_add_flag(gBacklightWakeOverlay, LV_OBJ_FLAG_HIDDEN);
+  }
+}
+
+bool consumeBacklightWakeRequest() {
+  const bool requested = gBacklightWakeRequested;
+  gBacklightWakeRequested = false;
+  return requested;
 }
 
 }  // namespace UI

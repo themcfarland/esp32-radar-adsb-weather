@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.22.0 - Weekly backlight schedule
+
+### Added
+- Prominent diagnostics link on the main configuration page.
+- Independent Monday-to-Sunday backlight start and end times.
+- Per-day schedule enable switch and global weekly schedule switch.
+- Overnight schedule support, for example 18:00-02:00.
+- Touch wake for 60 seconds while outside the active backlight interval.
+- Invisible wake overlay so the first wake touch does not activate map controls.
+- Backlight state, schedule state and wake countdown in web diagnostics and JSON API.
+
+### Safety
+- The backlight remains on until NTP time is synchronized.
+- Only the CH422G backlight output is switched; network services and data updates continue.
+- Existing conservative LCD timing, 20-line bounce buffer and manual RGB DMA recovery are unchanged.
+
+## 0.21.0 - Diagnostics and local clock
+
+### Added
+- Web diagnostics page at `/diagnostics` with live five-second refresh.
+- Diagnostics JSON API at `/api/diagnostics`.
+- Local clock and date in the display header.
+- NTP synchronization status, CET/CEST timezone, memory, network, data-source and LCD statistics.
+
+### Changed
+- The static `RADAR CR + ADS-B` header title is replaced by local time and date.
+- Header refresh interval is one second.
+
+
+## 0.20.2 - Display patch compatibility fix
+
+### Fixed
+- The PlatformIO display-driver patch now accepts any previous numeric bounce-buffer value, including 30 left by v0.20.0 in `.pio/libdeps`.
+- A missing or changed driver macro is reported as a warning instead of aborting the complete build.
+- Added a fallback search for the bounce-buffer macro if the library changes the header filename.
+
+## 0.20.1 - Conservative LCD recovery
+
+### Fixed
+- Removed the five-second periodic RGB DMA restart that worsened horizontal image movement on tested hardware.
+- Restored the proven 20-line RGB bounce buffer and original redraw pacing from v0.19.0.
+
+### Added
+- Manual `Srovnat LCD` action remains available in the web interface.
+
 ## 0.19.0 - Home web, three aircraft alerts and layer switches
 
 ### Added

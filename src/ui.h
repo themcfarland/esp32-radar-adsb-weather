@@ -18,5 +18,7 @@ void updateHeader(const char* networkStatus, const char* radarStatus,
 bool radarPaused();
 bool consumeManualRefresh();
 bool consumeMapTap(int16_t& x, int16_t& y);
+void setBacklightWakeOverlay(bool enabled);
+bool consumeBacklightWakeRequest();
 
 }  // namespace UI
