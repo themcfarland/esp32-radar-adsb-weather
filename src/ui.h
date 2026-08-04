@@ -13,7 +13,7 @@ void presentMap();
 void invalidateMap();  // Backward-compatible alias for presentMap().
 void updateWeather(const WeatherSnapshot& weather);
 void updateAstronomy(const AstronomySnapshot& astronomy);
-void updateHeader(bool wifiConnected, const char* radarStatus,
+void updateHeader(const char* networkStatus, const char* radarStatus,
                   const AircraftSnapshot& aircraft);
 bool radarPaused();
 bool consumeManualRefresh();

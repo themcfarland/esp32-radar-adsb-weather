@@ -507,6 +507,30 @@ void circle(uint16_t* buffer, uint16_t width, uint16_t height, int cx, int cy,
   }
 }
 
+void circleOutline(uint16_t* buffer, uint16_t width, uint16_t height, int cx,
+                   int cy, int radius, uint16_t c) {
+  int x = radius;
+  int y = 0;
+  int error = 1 - radius;
+  while (x >= y) {
+    putPixel(buffer, width, height, cx + x, cy + y, c);
+    putPixel(buffer, width, height, cx + y, cy + x, c);
+    putPixel(buffer, width, height, cx - y, cy + x, c);
+    putPixel(buffer, width, height, cx - x, cy + y, c);
+    putPixel(buffer, width, height, cx - x, cy - y, c);
+    putPixel(buffer, width, height, cx - y, cy - x, c);
+    putPixel(buffer, width, height, cx + y, cy - x, c);
+    putPixel(buffer, width, height, cx + x, cy - y, c);
+    ++y;
+    if (error < 0) {
+      error += 2 * y + 1;
+    } else {
+      --x;
+      error += 2 * (y - x) + 1;
+    }
+  }
+}
+
 uint16_t altitudeColor(int32_t altitudeFt) {
   if (altitudeFt < 0) return color(0xD0D9DF);
   if (altitudeFt < 5000) return color(0x58E487);
@@ -703,7 +727,8 @@ void drawBase(lv_obj_t* canvas, uint16_t* buffer, uint16_t width,
 }
 
 void drawReference(lv_obj_t* canvas, uint16_t* buffer, uint16_t width,
-                   uint16_t height, const MapViewport& viewport) {
+                   uint16_t height, const MapViewport& viewport,
+                   bool radarLayerEnabled, bool adsbLayerEnabled) {
   const uint16_t borderShadow = color(0x081018);
   const uint16_t border = color(0xDCEAF2);
   const uint16_t city = color(0xFFFFFF);
@@ -731,12 +756,19 @@ void drawReference(lv_obj_t* canvas, uint16_t* buffer, uint16_t width,
   }
 
   drawStation(buffer, width, height, viewport);
-  drawLegend(canvas, buffer, width, height);
+  if (radarLayerEnabled) drawLegend(canvas, buffer, width, height);
   drawZoomBadge(canvas, buffer, width, height, viewport);
 
   fillRect(buffer, width, height, 0, height - 22, width, 22, color(0x071018));
-  drawText(canvas, 10, height - 18, 270,
-           "CHMI MAX_Z | tuknutim: 50 > 25 > 10 > CR", 0x91A9B7,
+  const char* layerText = radarLayerEnabled && adsbLayerEnabled
+                              ? "Vrstvy: RADAR + ADS-B"
+                              : radarLayerEnabled
+                                    ? "Vrstvy: RADAR"
+                                    : adsbLayerEnabled ? "Vrstvy: ADS-B"
+                                                       : "Vrstvy: vypnuty";
+  char footer[96];
+  snprintf(footer, sizeof(footer), "%s | tap: 50 > 25 > 10 > CR", layerText);
+  drawText(canvas, 10, height - 18, 340, footer, 0x91A9B7,
            &lv_font_montserrat_10);
   drawText(canvas, width - 150, height - 18, 140, "Stanice: Dolni Vlkys",
            0x91A9B7, &lv_font_montserrat_10, LV_TEXT_ALIGN_RIGHT);
@@ -744,7 +776,8 @@ void drawReference(lv_obj_t* canvas, uint16_t* buffer, uint16_t width,
 
 void drawAircraft(lv_obj_t* canvas, uint16_t* buffer, uint16_t width,
                   uint16_t height, const AircraftSnapshot& snapshot,
-                  const MapViewport& viewport) {
+                  const MapViewport& viewport,
+                  const AircraftAlertConfig& alert) {
   if (!snapshot.valid) return;
 
   size_t labelsDrawn = 0;
@@ -754,22 +787,43 @@ void drawAircraft(lv_obj_t* canvas, uint16_t* buffer, uint16_t width,
     const int cx = mapX(aircraft.lon, width, viewport);
     const int cy = mapY(aircraft.lat, height, viewport);
     const float angle = aircraft.trackDeg * DEG_TO_RAD;
-    const uint16_t c = altitudeColor(aircraft.altitudeFt);
+    const int8_t alertSlot = aircraftAlertMatchIndex(aircraft, alert);
+    const bool highlighted = alertSlot >= 0;
+    constexpr uint32_t kAlertColors[AIRCRAFT_ALERT_SLOT_COUNT] = {
+        0xFF4FD8, 0x00E5FF, 0xFFD54F};
+    const uint16_t c = highlighted
+                           ? color(kAlertColors[static_cast<size_t>(alertSlot)])
+                           : altitudeColor(aircraft.altitudeFt);
+    const float symbolRadius = highlighted ? 13.0f : 9.0f;
+    const float wingRadius = highlighted ? 10.0f : 7.0f;
 
-    const int noseX = cx + lroundf(sinf(angle) * 9.0f);
-    const int noseY = cy - lroundf(cosf(angle) * 9.0f);
-    const int leftX = cx + lroundf(sinf(angle - 2.45f) * 7.0f);
-    const int leftY = cy - lroundf(cosf(angle - 2.45f) * 7.0f);
-    const int rightX = cx + lroundf(sinf(angle + 2.45f) * 7.0f);
-    const int rightY = cy - lroundf(cosf(angle + 2.45f) * 7.0f);
+    const int noseX = cx + lroundf(sinf(angle) * symbolRadius);
+    const int noseY = cy - lroundf(cosf(angle) * symbolRadius);
+    const int leftX = cx + lroundf(sinf(angle - 2.45f) * wingRadius);
+    const int leftY = cy - lroundf(cosf(angle - 2.45f) * wingRadius);
+    const int rightX = cx + lroundf(sinf(angle + 2.45f) * wingRadius);
+    const int rightY = cy - lroundf(cosf(angle + 2.45f) * wingRadius);
+
+    if (highlighted) {
+      // Visual-only alert: a larger double ring and larger aircraft symbol.
+      // Three saved targets use three ring colours. No sound or popup is used.
+      const uint16_t outer = color(0xFFFFFF);
+      circleOutline(buffer, width, height, cx, cy, 16, outer);
+      circleOutline(buffer, width, height, cx, cy, 14, c);
+      line(buffer, width, height, cx - 19, cy, cx - 15, cy, c);
+      line(buffer, width, height, cx + 15, cy, cx + 19, cy, c);
+      line(buffer, width, height, cx, cy - 19, cx, cy - 15, c);
+      line(buffer, width, height, cx, cy + 15, cx, cy + 19, c);
+    }
 
     line(buffer, width, height, noseX, noseY, leftX, leftY, c);
     line(buffer, width, height, leftX, leftY, rightX, rightY, c);
     line(buffer, width, height, rightX, rightY, noseX, noseY, c);
     line(buffer, width, height, cx, cy, noseX, noseY, c);
-    circle(buffer, width, height, cx, cy, 1, c);
+    circle(buffer, width, height, cx, cy, highlighted ? 2 : 1, c);
 
-    if (labelsDrawn < 22 && cx < static_cast<int>(width) - 12 && cy >= 8 &&
+    if ((highlighted || labelsDrawn < 22) &&
+        cx < static_cast<int>(width) - 12 && cy >= 8 &&
         cy < static_cast<int>(height) - 12) {
       char label[32];
       const char* id = aircraft.flight[0] ? aircraft.flight : aircraft.hex;
@@ -778,9 +832,9 @@ void drawAircraft(lv_obj_t* canvas, uint16_t* buffer, uint16_t width,
                  aircraft.altitudeFt / 1000.0f);
       else
         snprintf(label, sizeof(label), "%s GND", id);
-      drawText(canvas, cx + 9, cy - 8, 92, label, 0xFFFFFF,
-               &lv_font_montserrat_10);
-      ++labelsDrawn;
+      drawText(canvas, cx + (highlighted ? 17 : 9), cy - 8, 92, label,
+               0xFFFFFF, &lv_font_montserrat_10);
+      if (!highlighted) ++labelsDrawn;
     }
   }
 }

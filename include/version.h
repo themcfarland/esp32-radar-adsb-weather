@@ -1,4 +1,4 @@
 #pragma once
 #define FW_NAME "Waveshare Radar ADS-B Weather"
-#define FW_VERSION "0.17.0-radar-ram-sync"
+#define FW_VERSION "0.19.0-home-web-3alerts-layers"
 #define FW_TARGET "ESP32-S3-Touch-LCD-7 800x480"

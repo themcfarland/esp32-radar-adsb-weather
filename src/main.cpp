@@ -9,17 +9,21 @@
 #include "astronomy_service.h"
 #include "config.h"
 #include "debug_log.h"
+#include "device_config.h"
 #include "map_renderer.h"
 #include "radar_service.h"
-#include "secrets.h"
 #include "ui.h"
 #include "weather_service.h"
 #include "version.h"
 
-AdsbService adsb(ADSB_AIRCRAFT_URL);
+AdsbService adsb("");
 AstronomyService astronomy;
-WeatherService weather(WU_API_KEY, WU_STATION_ID);
+WeatherService weather("", "");
 RadarService radar;
+DeviceConfigService deviceConfig;
+AircraftAlertConfig aircraftAlert;
+bool radarLayerEnabled = true;
+bool adsbLayerEnabled = true;
 Preferences mapPreferences;
 MapViewport mapViewport;
 
@@ -38,20 +42,34 @@ bool mapDirty = true;
 bool mapViewSavePending = false;
 bool mapPreferencesReady = false;
 bool displayResyncPending = false;
+bool lastNetworkConnected = false;
 uint32_t lastMapViewChange = 0;
 
 namespace {
-bool isUnsetSecret(const char* value) {
-  if (!value || !value[0]) return true;
-  return strstr(value, "YOUR_") != nullptr || strstr(value, "CHANGE_ME") != nullptr;
-}
-
-bool wifiConfigured() {
-  return !isUnsetSecret(WIFI_SSID) && !isUnsetSecret(WIFI_PASSWORD);
+bool isUnsetValue(const String& value) {
+  return value.isEmpty() || value.indexOf("YOUR_") >= 0 ||
+         value.indexOf("CHANGE_ME") >= 0;
 }
 
 bool weatherConfigured() {
-  return !isUnsetSecret(WU_API_KEY) && WU_STATION_ID && WU_STATION_ID[0];
+  const DeviceSettings& settings = deviceConfig.settings();
+  return !isUnsetValue(settings.wuApiKey) &&
+         !settings.wuStationId.isEmpty();
+}
+
+void applyDeviceSettings() {
+  const DeviceSettings& settings = deviceConfig.settings();
+  adsb.setAircraftUrl(settings.adsbUrl);
+  weather.setConfig(settings.wuApiKey, settings.wuStationId);
+  aircraftAlert = deviceConfig.alertConfig();
+  radarLayerEnabled = settings.radarLayerEnabled;
+  adsbLayerEnabled = settings.adsbLayerEnabled;
+  DebugLog::printf(
+      "Runtime config: ADSB=%s WU=%s layers=radar:%d adsb:%d alerts=%s [%s|%s|%s]\n",
+      settings.adsbUrl.c_str(), settings.wuStationId.c_str(),
+      radarLayerEnabled ? 1 : 0, adsbLayerEnabled ? 1 : 0,
+      aircraftAlert.enabled ? "on" : "off", aircraftAlert.targets[0],
+      aircraftAlert.targets[1], aircraftAlert.targets[2]);
 }
 
 MapZoomMode storedZoomMode(uint8_t raw) {
@@ -180,42 +198,10 @@ void requestDisplaySyncRecovery(const char* reason) {
   lastDisplaySyncRecovery = millis();
 }
 
-void connectWifi(uint32_t timeoutMs = 12000) {
-  if (WiFi.status() == WL_CONNECTED) return;
-  if (!wifiConfigured()) {
-    Serial.println("WiFi is not configured. Edit include/secrets.h.");
-    return;
-  }
-
-  WiFi.mode(WIFI_STA);
-  WiFi.setSleep(false);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-
-  const uint32_t started = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - started < timeoutMs) {
-    delay(100);
-  }
-
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.printf("WiFi connected: %s, IP %s\n", WiFi.SSID().c_str(),
-                  WiFi.localIP().toString().c_str());
-    configTzTime(Config::TZ_INFO, "pool.ntp.org", "time.cloudflare.com");
-    struct tm timeInfo {};
-    if (getLocalTime(&timeInfo, 5000)) {
-      Serial.printf("Local time synchronized: %02d:%02d\n", timeInfo.tm_hour,
-                    timeInfo.tm_min);
-    } else {
-      Serial.println("NTP synchronization will continue in background.");
-    }
-  } else {
-    Serial.println("WiFi connection timed out; the UI will keep retrying.");
-  }
-}
-
 void updateHeader() {
+  const String network = deviceConfig.networkLabel();
   lvgl_port_lock(-1);
-  UI::updateHeader(WiFi.status() == WL_CONNECTED, radar.status(),
-                   adsb.snapshot());
+  UI::updateHeader(network.c_str(), radar.status(), adsb.snapshot());
   lvgl_port_unlock();
 }
 
@@ -248,7 +234,8 @@ void prepareRadarAnimation() {
   }
 
   // Allow the RGB DMA task to refill its bounce buffer after the one-time PNG
-  // conversion. The panel timing is never changed or restarted at runtime.
+  // conversion. The panel clock is never changed; a later recovery may only
+  // schedule an RGB DMA restart on the next VSYNC.
   delay(40);
 }
 
@@ -269,7 +256,7 @@ void redrawMap() {
                         mapViewport);
 
   bool radarRendered = false;
-  if (radar.frameCount() > 0) {
+  if (radarLayerEnabled && radar.frameCount() > 0) {
     if (radarFrame >= radar.frameCount()) radarFrame = 0;
     radarRendered = radar.renderFrame(radarFrame, buffer, Config::MAP_W,
                                       Config::MAP_H, mapViewport);
@@ -278,15 +265,18 @@ void redrawMap() {
   // LVGL object/text operations and the front/back canvas swap stay protected.
   lvgl_port_lock(-1);
   MapRenderer::drawReference(canvas, buffer, Config::MAP_W,
-                             Config::MAP_H, mapViewport);
-  MapRenderer::drawAircraft(canvas, buffer, Config::MAP_W, Config::MAP_H,
-                            adsb.snapshot(), mapViewport);
-  if (radarRendered) {
+                             Config::MAP_H, mapViewport,
+                             radarLayerEnabled, adsbLayerEnabled);
+  if (adsbLayerEnabled) {
+    MapRenderer::drawAircraft(canvas, buffer, Config::MAP_W, Config::MAP_H,
+                              adsb.snapshot(), mapViewport, aircraftAlert);
+  }
+  if (radarLayerEnabled && radarRendered) {
     MapRenderer::drawRadarAge(canvas, buffer, Config::MAP_W, Config::MAP_H,
                               radar.frameName(radarFrame), radarFrame,
                               radar.frameCount(), radar.sourceWidth(),
                               radar.sourceHeight());
-  } else {
+  } else if (radarLayerEnabled) {
     MapRenderer::drawRadarMessage(canvas, buffer, Config::MAP_W,
                                   Config::MAP_H, radar.status());
   }
@@ -297,7 +287,7 @@ void redrawMap() {
 }
 
 void performInitialUpdates() {
-  if (WiFi.status() != WL_CONNECTED) return;
+  if (!deviceConfig.stationConnected()) return;
 
   DebugLog::println("Initial weather update started");
   if (weatherConfigured()) {
@@ -325,6 +315,8 @@ void setup() {
   DebugLog::println("\nWaveshare 7in Radar + ADS-B + Weather");
   printHardwareInfo();
   loadMapViewport();
+  deviceConfig.load();
+  applyDeviceSettings();
 
   if (!psramFound() || ESP.getPsramSize() < 7UL * 1024UL * 1024UL) {
     Serial.println("Fatal: 8 MB OPI PSRAM is not available. Check PlatformIO memory_type=qio_opi.");
@@ -333,10 +325,10 @@ void setup() {
 
   // Initialize LittleFS and obtain the initial radar PNG files before the RGB
   // panel starts reading PSRAM. This avoids the heaviest flash/PSRAM traffic
-  // during LCD operation. Later five-minute updates are incremental (one PNG).
+  // during LCD operation. Later five-minute updates use one PNG in PSRAM only.
   radar.begin();
-  connectWifi();
-  if (WiFi.status() == WL_CONNECTED) {
+  deviceConfig.begin(&adsb.snapshot());
+  if (deviceConfig.stationConnected()) {
     Serial.println("Preloading CHMI radar files before LCD initialization...");
     radar.updateFrames();
   }
@@ -364,6 +356,7 @@ void setup() {
   redrawMap();
 
   performInitialUpdates();
+  lastNetworkConnected = deviceConfig.stationConnected();
   updateHeader();
   redrawMap();
 
@@ -374,12 +367,30 @@ void setup() {
 
 void loop() {
   const uint32_t now = millis();
+  deviceConfig.loop();
 
-  if (WiFi.status() != WL_CONNECTED &&
+  if (deviceConfig.consumeRuntimeSettingsChanged()) {
+    applyDeviceSettings();
+    mapDirty = true;
+    // Saving web settings writes NVS while the RGB panel is active. Schedule
+    // one recovery on the next VSYNC after the new settings are applied.
+    displayResyncPending = true;
+    DebugLog::println("Runtime web settings applied without restart");
+  }
+
+  if (!deviceConfig.stationConnected() &&
       due(now, lastWifiRetry, Config::WIFI_RETRY_MS)) {
     lastWifiRetry = now;
-    connectWifi(4000);
+    deviceConfig.ensureNetwork(4000);
   }
+
+  const bool networkConnected = deviceConfig.stationConnected();
+  if (networkConnected && !lastNetworkConnected) {
+    DebugLog::println("WiFi restored: refreshing network data");
+    performInitialUpdates();
+    mapDirty = true;
+  }
+  lastNetworkConnected = networkConnected;
 
   int16_t mapTapX = 0;
   int16_t mapTapY = 0;
@@ -388,7 +399,7 @@ void loop() {
   }
 
   const bool manualRefresh = UI::consumeManualRefresh();
-  if (manualRefresh && WiFi.status() == WL_CONNECTED) {
+  if (manualRefresh && deviceConfig.stationConnected()) {
     DebugLog::println("Manual refresh requested");
     if (weatherConfigured()) weather.updateCurrent();
     weather.updateForecast();
@@ -406,14 +417,14 @@ void loop() {
     mapDirty = true;
   }
 
-  if (WiFi.status() == WL_CONNECTED &&
+  if (deviceConfig.stationConnected() &&
       due(now, lastAdsbUpdate, Config::ADSB_REFRESH_MS)) {
     lastAdsbUpdate = now;
     adsb.update();
     mapDirty = true;
   }
 
-  if (WiFi.status() == WL_CONNECTED &&
+  if (deviceConfig.stationConnected() &&
       due(now, lastRadarUpdate, Config::RADAR_REFRESH_MS)) {
     lastRadarUpdate = now;
     if (radar.updateFrames()) {
@@ -425,7 +436,7 @@ void loop() {
     }
   }
 
-  if (weatherConfigured() && WiFi.status() == WL_CONNECTED &&
+  if (weatherConfigured() && deviceConfig.stationConnected() &&
       due(now, lastCurrentWeatherUpdate,
           Config::CURRENT_WEATHER_REFRESH_MS)) {
     lastCurrentWeatherUpdate = now;
@@ -433,7 +444,7 @@ void loop() {
     updateWeatherUi();
   }
 
-  if (WiFi.status() == WL_CONNECTED &&
+  if (deviceConfig.stationConnected() &&
       due(now, lastForecastUpdate, Config::FORECAST_REFRESH_MS)) {
     lastForecastUpdate = now;
     weather.updateForecast();
@@ -444,7 +455,7 @@ void loop() {
     updateAstronomy();
   }
 
-  if (!UI::radarPaused() && radar.frameCount() > 1 &&
+  if (radarLayerEnabled && !UI::radarPaused() && radar.frameCount() > 1 &&
       due(now, lastRadarAnimation, Config::RADAR_ANIMATION_MS)) {
     lastRadarAnimation = now;
     radarFrame = (radarFrame + 1) % radar.frameCount();
@@ -477,12 +488,17 @@ void loop() {
   if (due(now, lastDebugHeartbeat, 10000)) {
     lastDebugHeartbeat = now;
     const WeatherSnapshot& ws = weather.snapshot();
-    DebugLog::printf("HEARTBEAT ms=%u WiFi=%d heap=%u kB forecast=%s cards=%u\n",
-                     static_cast<unsigned>(now),
-                     static_cast<int>(WiFi.status()),
-                     static_cast<unsigned>(ESP.getFreeHeap() / 1024),
-                     ws.forecastValid ? ws.forecastProduct : "FAILED",
-                     static_cast<unsigned>(ws.forecastSlotCount));
+    DebugLog::printf(
+        "HEARTBEAT ms=%u WiFi=%d AP=%d heap=%u kB forecast=%s cards=%u layers=R%d/A%d alerts=%s [%s|%s|%s]\n",
+        static_cast<unsigned>(now),
+        deviceConfig.stationConnected() ? 1 : 0,
+        deviceConfig.portalActive() ? 1 : 0,
+        static_cast<unsigned>(ESP.getFreeHeap() / 1024),
+        ws.forecastValid ? ws.forecastProduct : "FAILED",
+        static_cast<unsigned>(ws.forecastSlotCount),
+        radarLayerEnabled ? 1 : 0, adsbLayerEnabled ? 1 : 0,
+        aircraftAlert.enabled ? "on" : "off", aircraftAlert.targets[0],
+        aircraftAlert.targets[1], aircraftAlert.targets[2]);
   }
 
   delay(5);

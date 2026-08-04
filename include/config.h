@@ -53,6 +53,10 @@ constexpr uint32_t FORECAST_REFRESH_MS = 60UL * 60UL * 1000UL;
 constexpr uint32_t ASTRONOMY_REFRESH_MS = 60UL * 1000UL;
 constexpr uint32_t WIFI_RETRY_MS = 15UL * 1000UL;
 
+constexpr char CONFIG_HOSTNAME[] = "radar-adsb";
+constexpr char CONFIG_AP_PREFIX[] = "Radar-ADSB-Setup";
+constexpr char CONFIG_AP_PASSWORD[] = "radarsetup";
+
 constexpr size_t MAX_AIRCRAFT = 80;
 constexpr uint32_t AIRCRAFT_MAX_AGE_SEC = 30;
 

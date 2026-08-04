@@ -1,36 +1,34 @@
 # Changelog
 
-## 0.16.0 – touch-map-zoom-nvs
+## 0.19.0 - Home web, three aircraft alerts and layer switches
 
-- klepnutí do mapy přepíná celou ČR, 50 km, 25 km a 10 km,
-- výřez se centruje na místo dotyku,
-- režim a střed mapy se ukládají do NVS,
-- nastavení se obnoví po restartu,
-- radar, hranice, města, stanice i ADS-B používají stejný viewport.
+### Added
 
-## 0.15.0 – geoboundaries-300pts
+- Persistent web configuration on the home Wi-Fi IP and mDNS hostname.
+- Three independent aircraft highlight targets.
+- Current-aircraft selector with assignment to alert slots 1, 2 or 3.
+- Independent radar and ADS-B layer switches.
+- Layer and three-alert state in `/api/status`.
+- Runtime application of display settings without restart.
+- Automatic migration of the v0.18.0 single alert into slot 1.
 
-- skutečný obrys České republiky z geoBoundaries,
-- redukce hranice na 300 bodů vhodných pro ESP32.
+### Changed
 
-## 0.13.0 – openmeteo-http-fix
+- Wi-Fi restart is now required only after SSID or password changes.
+- Map footer reports the active layer combination.
+- Radar legend is hidden when the radar layer is disabled.
+- Highlighted aircraft use a distinct ring colour for each of the three slots.
+- NVS writes from web settings request one RGB DMA recovery on the next VSYNC.
 
-- Open-Meteo jako hlavní forecast,
-- HTTP/1.0 a dekódované tělo odpovědi kvůli chunked transfer,
-- předpověď +3, +6, +9, +12, +24 a +48 hodin.
+### Preserved
 
-## 0.12.0 – diagnostics
+- First-run AP and captive portal.
+- RAM-only runtime radar updates.
+- Touch map zoom and persistent viewport.
+- Open-Meteo forecast fallback.
 
-- podrobnější sériové logování,
-- heartbeat a diagnostika forecastu.
+## 0.18.0 - Web configuration and aircraft highlight
 
-## 0.9.0 – hourly-48h
-
-- šest hodinových forecast karet do 48 hodin.
-
-## 0.7.0 – RGB stability
-
-- původní 16MHz časování panelu,
-- bounce buffer 20 řádků,
-- kompaktní radarová cache v PSRAM,
-- pomalejší radarová animace pro stabilitu RGB panelu.
+- First-run Wi-Fi AP and captive portal.
+- Home-network web interface.
+- One visual-only aircraft highlight.

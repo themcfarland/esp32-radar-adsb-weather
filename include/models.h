@@ -1,5 +1,6 @@
 #pragma once
 #include <Arduino.h>
+#include <strings.h>
 #include "config.h"
 
 struct Aircraft {
@@ -12,6 +13,31 @@ struct Aircraft {
   int32_t altitudeFt = -1;
   float seenPositionSec = 9999.0f;
 };
+
+constexpr size_t AIRCRAFT_ALERT_SLOT_COUNT = 3;
+
+struct AircraftAlertConfig {
+  bool enabled = false;
+  char targets[AIRCRAFT_ALERT_SLOT_COUNT][17] = {{0}};
+};
+
+inline int8_t aircraftAlertMatchIndex(const Aircraft& aircraft,
+                                      const AircraftAlertConfig& alert) {
+  if (!alert.enabled) return -1;
+  for (size_t i = 0; i < AIRCRAFT_ALERT_SLOT_COUNT; ++i) {
+    if (!alert.targets[i][0]) continue;
+    if (strcasecmp(aircraft.hex, alert.targets[i]) == 0 ||
+        strcasecmp(aircraft.flight, alert.targets[i]) == 0) {
+      return static_cast<int8_t>(i);
+    }
+  }
+  return -1;
+}
+
+inline bool aircraftMatchesAlert(const Aircraft& aircraft,
+                                 const AircraftAlertConfig& alert) {
+  return aircraftAlertMatchIndex(aircraft, alert) >= 0;
+}
 
 struct AircraftSnapshot {
   Aircraft items[Config::MAX_AIRCRAFT];

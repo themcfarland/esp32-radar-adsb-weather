@@ -18,10 +18,12 @@ const char* zoomModeLabel(MapZoomMode mode);
 void drawBase(lv_obj_t* canvas, uint16_t* buffer, uint16_t width,
               uint16_t height, const MapViewport& viewport);
 void drawReference(lv_obj_t* canvas, uint16_t* buffer, uint16_t width,
-                   uint16_t height, const MapViewport& viewport);
+                   uint16_t height, const MapViewport& viewport,
+                   bool radarLayerEnabled, bool adsbLayerEnabled);
 void drawAircraft(lv_obj_t* canvas, uint16_t* buffer, uint16_t width,
                   uint16_t height, const AircraftSnapshot& aircraft,
-                  const MapViewport& viewport);
+                  const MapViewport& viewport,
+                  const AircraftAlertConfig& alert);
 void drawRadarAge(lv_obj_t* canvas, uint16_t* buffer, uint16_t width,
                   uint16_t height, const char* frameName, uint8_t frameIndex,
                   uint8_t frameCount, uint16_t sourceWidth,

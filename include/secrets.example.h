@@ -1,8 +1,8 @@
 #pragma once
 
-// Copy this file to include/secrets.h and fill in your values.
-#define WIFI_SSID       "YOUR_WIFI_SSID"
-#define WIFI_PASSWORD   "YOUR_WIFI_PASSWORD"
-#define WU_API_KEY      "YOUR_WEATHER_UNDERGROUND_API_KEY"
-#define WU_STATION_ID   "IPLZE179"
+// This file is optional in v0.18.0. Wi-Fi is always configured through the
+// first-run access point and then stored in NVS.
+// Copy to secrets.h only when you want compile-time defaults for WU and ADS-B.
+#define WU_API_KEY "YOUR_WEATHER_UNDERGROUND_API_KEY"
+#define WU_STATION_ID "IPLZE179"
 #define ADSB_AIRCRAFT_URL "http://192.168.1.170:8080/data/aircraft.json"

@@ -476,16 +476,13 @@ void updateAstronomy(const AstronomySnapshot& astronomy) {
   drawMoonPhase(astronomy.moonPhase);
 }
 
-void updateHeader(bool wifiConnected, const char* radarStatus,
+void updateHeader(const char* networkStatus, const char* radarStatus,
                   const AircraftSnapshot& aircraft) {
-  char text[192];
-  if (wifiConnected) {
-    snprintf(text, sizeof(text), "WiFi %ld dBm  |  %s  |  %s",
-             static_cast<long>(WiFi.RSSI()), radarStatus, aircraft.status);
-  } else {
-    snprintf(text, sizeof(text), "WiFi offline  |  %s  |  %s", radarStatus,
-             aircraft.status);
-  }
+  char text[224];
+  snprintf(text, sizeof(text), "%s  |  %s  |  %s",
+           networkStatus && networkStatus[0] ? networkStatus : "Sit offline",
+           radarStatus && radarStatus[0] ? radarStatus : "Radar --",
+           aircraft.status);
   lv_label_set_text(gHeaderLabel, text);
 }
 

@@ -10,6 +10,10 @@ class WeatherService {
   bool update();
   bool updateCurrent();
   bool updateForecast();
+  void setConfig(const String& apiKey, const String& stationId) {
+    apiKey_ = apiKey;
+    stationId_ = stationId;
+  }
   const WeatherSnapshot& snapshot() const { return snapshot_; }
 
  private:
