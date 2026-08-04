@@ -23,6 +23,14 @@ bool isRadarName(const String& name) {
   return name.length() == 39;
 }
 
+bool removeIfExists(const String& path) {
+  return !LittleFS.exists(path) || LittleFS.remove(path);
+}
+
+bool removeIfExists(const char* path) {
+  return !LittleFS.exists(path) || LittleFS.remove(path);
+}
+
 void sortNames(String names[], uint8_t count) {
   for (uint8_t i = 0; i < count; ++i) {
     for (uint8_t j = i + 1; j < count; ++j) {
@@ -171,7 +179,6 @@ bool RadarService::scanLatestFiles(
   }
 
   WiFiClient* stream = http.getStreamPtr();
-  stream->setTimeout(7000);
   const uint32_t started = millis();
   while ((http.connected() || stream->available()) &&
          millis() - started < 45000UL) {
@@ -250,7 +257,7 @@ RadarService::DownloadResult RadarService::downloadFile(
   }
 
   const String tempPath = localPath + ".part";
-  LittleFS.remove(tempPath);
+  removeIfExists(tempPath);
   File output = LittleFS.open(tempPath, FILE_WRITE);
   if (!output) {
     http.end();
@@ -296,18 +303,272 @@ RadarService::DownloadResult RadarService::downloadFile(
   http.end();
 
   if (written < 100 || (remaining > 0) || !validatePngFile(tempPath)) {
-    LittleFS.remove(tempPath);
+    removeIfExists(tempPath);
     httpCode = -1002;
     return DownloadResult::kFailed;
   }
 
-  LittleFS.remove(localPath);
+  removeIfExists(localPath);
   if (!LittleFS.rename(tempPath, localPath)) {
-    LittleFS.remove(tempPath);
+    removeIfExists(tempPath);
     httpCode = -1003;
     return DownloadResult::kFailed;
   }
   return DownloadResult::kOk;
+}
+
+
+RadarService::DownloadResult RadarService::downloadFileToMemory(
+    const String& remoteName, uint8_t*& data, size_t& dataSize,
+    int& httpCode) {
+  data = nullptr;
+  dataSize = 0;
+
+  WiFiClientSecure client;
+  client.setInsecure();
+
+  HTTPClient http;
+  http.useHTTP10(true);
+  http.setConnectTimeout(6500);
+  http.setTimeout(14000);
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  const String url = String(Config::RADAR_BASE_URL) + remoteName;
+  if (!http.begin(client, url)) {
+    httpCode = -1100;
+    return DownloadResult::kFailed;
+  }
+
+  http.addHeader("User-Agent", "ESP32-CHMI-Radar/0.7");
+  http.addHeader("Accept", "image/png");
+  http.addHeader("Accept-Encoding", "identity");
+  http.addHeader("Connection", "close");
+  httpCode = http.GET();
+  if (httpCode == HTTP_CODE_NOT_FOUND) {
+    http.end();
+    client.stop();
+    return DownloadResult::kNotFound;
+  }
+  if (httpCode != HTTP_CODE_OK) {
+    http.end();
+    client.stop();
+    return DownloadResult::kFailed;
+  }
+
+  constexpr size_t kMaximumPngBytes = 2U * 1024U * 1024U;
+  const int declaredLength = http.getSize();
+  if (declaredLength > static_cast<int>(kMaximumPngBytes)) {
+    http.end();
+    client.stop();
+    httpCode = -1101;
+    return DownloadResult::kFailed;
+  }
+
+  const size_t capacity = declaredLength > 0
+                              ? static_cast<size_t>(declaredLength)
+                              : kMaximumPngBytes;
+  data = static_cast<uint8_t*>(heap_caps_malloc(
+      capacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+  if (!data) {
+    http.end();
+    client.stop();
+    httpCode = -1102;
+    return DownloadResult::kFailed;
+  }
+
+  WiFiClient* stream = http.getStreamPtr();
+  uint32_t lastData = millis();
+  while ((http.connected() || stream->available()) && dataSize < capacity) {
+    const size_t available = stream->available();
+    if (available == 0) {
+      if (!http.connected()) break;
+      if (millis() - lastData > 14000UL) break;
+      delay(2);
+      continue;
+    }
+
+    size_t requested = available;
+    if (requested > 512U) requested = 512U;
+    if (requested > capacity - dataSize) requested = capacity - dataSize;
+    const int received = stream->readBytes(data + dataSize, requested);
+    if (received <= 0) break;
+    dataSize += static_cast<size_t>(received);
+    lastData = millis();
+
+    // Keep the PSRAM burst short so the RGB DMA can refill its bounce buffer.
+    delay(2);
+  }
+
+  http.end();
+  client.stop();
+
+  static constexpr uint8_t kPngSignature[8] = {
+      0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
+  if (dataSize < 100U ||
+      (declaredLength > 0 && dataSize != static_cast<size_t>(declaredLength)) ||
+      memcmp(data, kPngSignature, sizeof(kPngSignature)) != 0) {
+    heap_caps_free(data);
+    data = nullptr;
+    dataSize = 0;
+    httpCode = -1103;
+    return DownloadResult::kFailed;
+  }
+
+  Serial.printf("Radar RAM download: %s, %u bytes\n", remoteName.c_str(),
+                static_cast<unsigned>(dataSize));
+  return DownloadResult::kOk;
+}
+
+bool RadarService::decodeMemoryToOverlay(uint8_t* data, size_t dataSize,
+                                         uint8_t* overlay, uint16_t width,
+                                         uint16_t height) {
+  if (!data || dataSize < 100U || !overlay || width == 0 || height == 0 ||
+      width > Config::MAP_W || height > Config::MAP_H) {
+    return false;
+  }
+
+  const int openResult =
+      png_.openRAM(data, static_cast<int>(dataSize), pngDraw);
+  if (openResult != PNG_SUCCESS) {
+    snprintf(status_, sizeof(status_), "Radar RAM PNG open %d", openResult);
+    return false;
+  }
+
+  sourceWidth_ = static_cast<uint16_t>(png_.getWidth());
+  sourceHeight_ = static_cast<uint16_t>(png_.getHeight());
+  if (sourceWidth_ == 0 || sourceHeight_ == 0 ||
+      sourceWidth_ > Config::RADAR_SOURCE_MAX_W ||
+      sourceHeight_ > Config::RADAR_SOURCE_MAX_H) {
+    png_.close();
+    snprintf(status_, sizeof(status_), "Radar RAM PNG rozmer %ux%u",
+             static_cast<unsigned>(sourceWidth_),
+             static_cast<unsigned>(sourceHeight_));
+    return false;
+  }
+
+  runtimeLineBuffer_ = static_cast<uint16_t*>(heap_caps_malloc(
+      static_cast<size_t>(sourceWidth_) * sizeof(uint16_t),
+      MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+  if (!runtimeLineBuffer_) {
+    png_.close();
+    snprintf(status_, sizeof(status_), "Radar: chybi RAM pro radek PNG");
+    return false;
+  }
+
+  runtimeOverlayTarget_ = overlay;
+  runtimeOverlayWidth_ = width;
+  runtimeOverlayHeight_ = height;
+  for (uint16_t y = 0; y < height; ++y) {
+    memset(runtimeOverlayTarget_ + static_cast<size_t>(y) * width, 0, width);
+    if ((y & 0x07) == 0x07) delay(1);
+  }
+
+  const float mapLonSpan = Config::MAP_LON_RIGHT - Config::MAP_LON_LEFT;
+  const float radarLonSpan = Config::RADAR_LON_RIGHT - Config::RADAR_LON_LEFT;
+  const float mapMercTop = mercatorY(Config::MAP_LAT_TOP);
+  const float mapMercBottom = mercatorY(Config::MAP_LAT_BOTTOM);
+  const float radarMercTop = mercatorY(Config::RADAR_LAT_TOP);
+  const float radarMercBottom = mercatorY(Config::RADAR_LAT_BOTTOM);
+
+  for (uint16_t x = 0; x < width; ++x) {
+    const float lon = Config::MAP_LON_LEFT +
+                      (static_cast<float>(x) / (width - 1)) * mapLonSpan;
+    runtimeSourceXByMapX_[x] = static_cast<int16_t>(lroundf(
+        (lon - Config::RADAR_LON_LEFT) / radarLonSpan * (sourceWidth_ - 1)));
+  }
+  for (uint16_t y = 0; y < height; ++y) {
+    const float fraction = static_cast<float>(y) / (height - 1);
+    const float merc = mapMercTop - fraction * (mapMercTop - mapMercBottom);
+    runtimeSourceYByMapY_[y] = static_cast<int16_t>(lroundf(
+        (radarMercTop - merc) / (radarMercTop - radarMercBottom) *
+        (sourceHeight_ - 1)));
+  }
+
+  const int decodeResult = png_.decode(nullptr, 0);
+  png_.close();
+
+  runtimeOverlayTarget_ = nullptr;
+  runtimeOverlayWidth_ = 0;
+  runtimeOverlayHeight_ = 0;
+  heap_caps_free(runtimeLineBuffer_);
+  runtimeLineBuffer_ = nullptr;
+
+  if (decodeResult != PNG_SUCCESS) {
+    snprintf(status_, sizeof(status_), "Radar RAM PNG decode %d",
+             decodeResult);
+    return false;
+  }
+  return true;
+}
+
+bool RadarService::updateNewestFrameInMemory(const String& newestName) {
+  if (!animationCacheReady() || availableFrames_ != Config::RADAR_FRAME_COUNT ||
+      cacheWidth_ == 0 || cacheHeight_ == 0) {
+    snprintf(status_, sizeof(status_), "Radar: RAM cache neni pripraven");
+    return false;
+  }
+  if (names_[availableFrames_ - 1] == newestName) {
+    snprintf(status_, sizeof(status_), "Radar: aktualni %u/%u",
+             static_cast<unsigned>(availableFrames_),
+             static_cast<unsigned>(Config::RADAR_FRAME_COUNT));
+    return false;
+  }
+
+  uint8_t* pngData = nullptr;
+  size_t pngSize = 0;
+  int code = 0;
+  const DownloadResult result =
+      downloadFileToMemory(newestName, pngData, pngSize, code);
+  if (result != DownloadResult::kOk) {
+    snprintf(status_, sizeof(status_), "Radar RAM HTTP %d", code);
+    return false;
+  }
+
+  const size_t overlayBytes =
+      static_cast<size_t>(cacheWidth_) * cacheHeight_;
+  uint8_t* newOverlay = static_cast<uint8_t*>(heap_caps_malloc(
+      overlayBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+  if (!newOverlay) {
+    heap_caps_free(pngData);
+    snprintf(status_, sizeof(status_), "Radar: malo PSRAM pro novy snimek");
+    return false;
+  }
+
+  const bool decoded = decodeMemoryToOverlay(
+      pngData, pngSize, newOverlay, cacheWidth_, cacheHeight_);
+  heap_caps_free(pngData);
+  if (!decoded) {
+    heap_caps_free(newOverlay);
+    return false;
+  }
+
+  heap_caps_free(animationCache_[0]);
+  for (uint8_t i = 0; i + 1 < Config::RADAR_FRAME_COUNT; ++i) {
+    animationCache_[i] = animationCache_[i + 1];
+    names_[i] = names_[i + 1];
+  }
+  animationCache_[Config::RADAR_FRAME_COUNT - 1] = newOverlay;
+  names_[Config::RADAR_FRAME_COUNT - 1] = newestName;
+  cachedFrames_ = availableFrames_;
+
+  snprintf(status_, sizeof(status_), "Radar: RAM novy snimek");
+  Serial.printf("Radar RAM update complete: %s | free PSRAM %u kB\n",
+                newestName.c_str(),
+                static_cast<unsigned>(ESP.getFreePsram() / 1024));
+  return true;
+}
+
+bool RadarService::updateFramesInMemory() {
+  snprintf(status_, sizeof(status_), "Radar: kontrola bez zapisu");
+  Serial.println("Radar: runtime RAM-only update; LittleFS will not be touched");
+
+  String latest[Config::RADAR_FRAME_COUNT];
+  uint8_t latestCount = 0;
+  if (!scanLatestFiles(latest, latestCount) || latestCount == 0) {
+    snprintf(status_, sizeof(status_), "Radar: index nedostupny, cache bezi");
+    return false;
+  }
+
+  return updateNewestFrameInMemory(latest[latestCount - 1]);
 }
 
 bool RadarService::validatePngFile(const String& path) const {
@@ -402,7 +663,7 @@ bool RadarService::commitStagedFrames(
   for (uint8_t i = 0; i < Config::RADAR_FRAME_COUNT; ++i) {
     const String backup = "/radar_" + String(i) + ".old";
     const String current = "/radar_" + String(i) + ".png";
-    LittleFS.remove(backup.c_str());
+    removeIfExists(backup.c_str());
     if (LittleFS.exists(current.c_str())) {
       LittleFS.rename(current.c_str(), backup.c_str());
     }
@@ -413,7 +674,7 @@ bool RadarService::commitStagedFrames(
     const uint8_t sourceIndex = newestFirst ? count - 1 - i : i;
     const String staged = "/radar_new_" + String(sourceIndex) + ".png";
     const String target = "/radar_" + String(i) + ".png";
-    LittleFS.remove(target.c_str());
+    removeIfExists(target.c_str());
     if (!LittleFS.rename(staged.c_str(), target.c_str())) {
       success = false;
       break;
@@ -425,7 +686,7 @@ bool RadarService::commitStagedFrames(
     for (uint8_t i = 0; i < Config::RADAR_FRAME_COUNT; ++i) {
       const String target = "/radar_" + String(i) + ".png";
       const String backup = "/radar_" + String(i) + ".old";
-      LittleFS.remove(target.c_str());
+      removeIfExists(target.c_str());
       if (LittleFS.exists(backup.c_str())) {
         LittleFS.rename(backup.c_str(), target.c_str());
       }
@@ -441,10 +702,10 @@ bool RadarService::commitStagedFrames(
     const String backup = "/radar_" + String(i) + ".old";
     const String staged = "/radar_new_" + String(i) + ".png";
     const String part = staged + ".part";
-    if (i >= count) LittleFS.remove(target.c_str());
-    LittleFS.remove(backup.c_str());
-    LittleFS.remove(staged.c_str());
-    LittleFS.remove(part.c_str());
+    if (i >= count) removeIfExists(target.c_str());
+    removeIfExists(backup.c_str());
+    removeIfExists(staged.c_str());
+    removeIfExists(part.c_str());
   }
 
   clearAnimationCache();
@@ -469,8 +730,8 @@ bool RadarService::commitNewestFrame(const String& newestName,
     const String current = "/radar_" + String(i) + ".png";
     const String old = "/radar_" + String(i) + ".old";
     const String restore = "/radar_restore_" + String(i) + ".png";
-    LittleFS.remove(old.c_str());
-    LittleFS.remove(restore.c_str());
+    removeIfExists(old.c_str());
+    removeIfExists(restore.c_str());
     if (!LittleFS.exists(current.c_str()) ||
         !LittleFS.rename(current.c_str(), old.c_str())) {
       // Restore files already moved to .old before returning.
@@ -515,30 +776,30 @@ bool RadarService::commitNewestFrame(const String& newestName,
         LittleFS.rename(shifted.c_str(), restore.c_str());
       }
     }
-    LittleFS.remove(newestTarget.c_str());
+    removeIfExists(newestTarget.c_str());
     for (uint8_t i = 0; i < Config::RADAR_FRAME_COUNT; ++i) {
       const String target = "/radar_" + String(i) + ".png";
       const String old = "/radar_" + String(i) + ".old";
       const String restore = "/radar_restore_" + String(i) + ".png";
-      LittleFS.remove(target.c_str());
+      removeIfExists(target.c_str());
       if (LittleFS.exists(old.c_str())) {
         LittleFS.rename(old.c_str(), target.c_str());
       } else if (LittleFS.exists(restore.c_str())) {
         LittleFS.rename(restore.c_str(), target.c_str());
       }
     }
-    LittleFS.remove(stagedPath.c_str());
+    removeIfExists(stagedPath.c_str());
     loadCachedFrames();
     snprintf(status_, sizeof(status_), "Radar: shift rollback");
     return false;
   }
 
-  LittleFS.remove("/radar_0.old");
+  removeIfExists("/radar_0.old");
   for (uint8_t i = 0; i < Config::RADAR_FRAME_COUNT; ++i) {
     const String old = "/radar_" + String(i) + ".old";
     const String restore = "/radar_restore_" + String(i) + ".png";
-    LittleFS.remove(old.c_str());
-    LittleFS.remove(restore.c_str());
+    removeIfExists(old.c_str());
+    removeIfExists(restore.c_str());
   }
 
   for (uint8_t i = 0; i + 1 < Config::RADAR_FRAME_COUNT; ++i) {
@@ -571,17 +832,19 @@ bool RadarService::updateFrames() {
     return false;
   }
 
+  if (displayActive_) return updateFramesInMemory();
+
   snprintf(status_, sizeof(status_), "Radar: hledam snimky");
   Serial.println("Radar: reading CHMI directory index...");
 
   for (uint8_t i = 0; i < Config::RADAR_FRAME_COUNT; ++i) {
     const String staged = "/radar_new_" + String(i) + ".png";
     const String part = staged + ".part";
-    LittleFS.remove(staged.c_str());
-    LittleFS.remove(part.c_str());
+    removeIfExists(staged.c_str());
+    removeIfExists(part.c_str());
   }
-  LittleFS.remove("/radar_new_single.png");
-  LittleFS.remove("/radar_new_single.png.part");
+  removeIfExists("/radar_new_single.png");
+  removeIfExists("/radar_new_single.png.part");
 
   String latest[Config::RADAR_FRAME_COUNT];
   uint8_t latestCount = 0;
@@ -679,11 +942,36 @@ int32_t RadarService::pngSeek(PNGFILE* file, int32_t position) {
 }
 
 void RadarService::pngDraw(PNGDRAW* draw) {
-  if (!active_ || !active_->decoded_ || draw->y < 0 ||
+  if (!active_ || !draw || draw->y < 0 ||
       draw->y >= active_->sourceHeight_ || draw->iWidth <= 0 ||
       draw->iWidth > active_->sourceWidth_) {
     return;
   }
+
+  // Runtime refresh path: decode one source line into small internal RAM and
+  // write only the matching rows of the compact RGB332 overlay. No full-size
+  // decoded image and no LittleFS access are needed while the LCD is active.
+  if (active_->runtimeOverlayTarget_ && active_->runtimeLineBuffer_) {
+    active_->png_.getLineAsRGB565(draw, active_->runtimeLineBuffer_,
+                                  PNG_RGB565_LITTLE_ENDIAN, 0x00000000);
+    for (uint16_t mapY = 0; mapY < active_->runtimeOverlayHeight_; ++mapY) {
+      if (active_->runtimeSourceYByMapY_[mapY] != draw->y) continue;
+      uint8_t* outputRow =
+          active_->runtimeOverlayTarget_ +
+          static_cast<size_t>(mapY) * active_->runtimeOverlayWidth_;
+      for (uint16_t mapX = 0; mapX < active_->runtimeOverlayWidth_; ++mapX) {
+        const int sourceX = active_->runtimeSourceXByMapX_[mapX];
+        if (sourceX < 0 || sourceX >= active_->sourceWidth_) continue;
+        const uint16_t pixel = active_->runtimeLineBuffer_[sourceX];
+        if (pixel == 0 || isNearBlack(pixel)) continue;
+        outputRow[mapX] = rgb565ToRgb332(pixel);
+      }
+    }
+    if ((draw->y & 0x07) == 0x07) delay(1);
+    return;
+  }
+
+  if (!active_->decoded_) return;
   uint16_t* row = active_->decoded_ +
                   static_cast<size_t>(draw->y) * active_->sourceWidth_;
   active_->png_.getLineAsRGB565(draw, row, PNG_RGB565_LITTLE_ENDIAN,

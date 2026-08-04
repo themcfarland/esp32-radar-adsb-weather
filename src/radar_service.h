@@ -15,6 +15,11 @@ class RadarService {
   bool begin();
   bool updateFrames();
 
+  // Call after the RGB panel and compact animation cache are ready. Runtime
+  // radar refreshes will then stay entirely in RAM/PSRAM and will not write
+  // PNG files to LittleFS while the LCD DMA is active.
+  void setDisplayActive(bool active) { displayActive_ = active; }
+
   // Decodes and scales all downloaded PNG files once. The compact 8-bit
   // overlays are then used by the animation, avoiding repeated PNG decoding
   // and large PSRAM bursts while the RGB LCD DMA is active.
@@ -55,6 +60,14 @@ class RadarService {
   bool commitNewestFrame(const String& newestName, const String& stagedPath);
   DownloadResult downloadFile(const String& remoteName,
                               const String& localPath, int& httpCode);
+  DownloadResult downloadFileToMemory(const String& remoteName,
+                                      uint8_t*& data, size_t& dataSize,
+                                      int& httpCode);
+  bool updateNewestFrameInMemory(const String& newestName);
+  bool updateFramesInMemory();
+  bool decodeMemoryToOverlay(uint8_t* data, size_t dataSize,
+                             uint8_t* overlay, uint16_t width,
+                             uint16_t height);
   bool validatePngFile(const String& path) const;
 
   bool decodeFrame(uint8_t frameIndex);
@@ -73,6 +86,15 @@ class RadarService {
   uint16_t* decoded_ = nullptr;
   size_t decodedCapacityPixels_ = 0;
 
+  // Runtime RAM decode writes directly into one compact overlay, line by line.
+  // It avoids a full-size decoded PNG buffer while the RGB panel is active.
+  uint8_t* runtimeOverlayTarget_ = nullptr;
+  uint16_t* runtimeLineBuffer_ = nullptr;
+  uint16_t runtimeOverlayWidth_ = 0;
+  uint16_t runtimeOverlayHeight_ = 0;
+  int16_t runtimeSourceXByMapX_[Config::MAP_W] = {};
+  int16_t runtimeSourceYByMapY_[Config::MAP_H] = {};
+
   // One RGB332 byte per output pixel. Six 600x444 overlays need about 1.52 MiB,
   // compared with more than 3 MiB for RGB565. Value zero means transparent.
   uint8_t* animationCache_[Config::RADAR_FRAME_COUNT] = {};
@@ -83,6 +105,7 @@ class RadarService {
   uint16_t sourceWidth_ = 0;
   uint16_t sourceHeight_ = 0;
   uint8_t availableFrames_ = 0;
+  bool displayActive_ = false;
   String names_[Config::RADAR_FRAME_COUNT];
   char status_[112] = "Radar: cekam";
 

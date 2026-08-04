@@ -5,4 +5,4 @@
 #define WIFI_PASSWORD   "YOUR_WIFI_PASSWORD"
 #define WU_API_KEY      "YOUR_WEATHER_UNDERGROUND_API_KEY"
 #define WU_STATION_ID   "IPLZE179"
-#define ADSB_AIRCRAFT_URL "http://192.168.1.100:8080/data/aircraft.json"
+#define ADSB_AIRCRAFT_URL "http://192.168.1.170:8080/data/aircraft.json"

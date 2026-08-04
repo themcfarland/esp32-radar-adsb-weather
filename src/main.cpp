@@ -3,6 +3,7 @@
 #include <WiFi.h>
 #include <Waveshare_ST7262_LVGL.h>
 #include <esp_system.h>
+#include <esp_lcd_panel_rgb.h>
 
 #include "adsb_service.h"
 #include "astronomy_service.h"
@@ -32,9 +33,11 @@ uint32_t lastAstronomyUpdate = 0;
 uint32_t lastWifiRetry = 0;
 uint32_t lastHeaderUpdate = 0;
 uint32_t lastDebugHeartbeat = 0;
+uint32_t lastDisplaySyncRecovery = 0;
 bool mapDirty = true;
 bool mapViewSavePending = false;
 bool mapPreferencesReady = false;
+bool displayResyncPending = false;
 uint32_t lastMapViewChange = 0;
 
 namespace {
@@ -156,6 +159,25 @@ bool validateDisplay() {
 
 bool due(uint32_t now, uint32_t previous, uint32_t interval) {
   return static_cast<int32_t>(now - previous) >= static_cast<int32_t>(interval);
+}
+
+void requestDisplaySyncRecovery(const char* reason) {
+  lv_disp_t* display = lv_disp_get_default();
+  if (!display || !display->driver || !display->driver->user_data) return;
+
+  auto* lcd = static_cast<ESP_PanelLcd*>(display->driver->user_data);
+  if (!lcd || !lcd->getHandle()) return;
+
+  const esp_err_t err = esp_lcd_rgb_panel_restart(lcd->getHandle());
+  if (err == ESP_OK) {
+    DebugLog::printf("LCD DMA resync requested: %s\n",
+                     reason ? reason : "runtime operation");
+  } else {
+    DebugLog::printf("LCD DMA resync failed (%d): %s\n",
+                     static_cast<int>(err),
+                     reason ? reason : "runtime operation");
+  }
+  lastDisplaySyncRecovery = millis();
 }
 
 void connectWifi(uint32_t timeoutMs = 12000) {
@@ -336,6 +358,8 @@ void setup() {
   // The LCD and map buffers now own their final PSRAM blocks. Convert each PNG
   // once to a compact 8-bit overlay; animation never decodes PNG again.
   prepareRadarAnimation();
+  radar.setDisplayActive(true);
+  DebugLog::println("Radar runtime mode: RAM-only, LittleFS writes disabled");
   updateHeader();
   redrawMap();
 
@@ -371,7 +395,10 @@ void loop() {
     updateWeatherUi();
     updateAstronomy();
     adsb.update();
-    if (radar.updateFrames()) prepareRadarAnimation();
+    if (radar.updateFrames()) {
+      if (!radar.animationCacheReady()) prepareRadarAnimation();
+      displayResyncPending = true;
+    }
     radarFrame = 0;
     lastCurrentWeatherUpdate = lastForecastUpdate = millis();
     lastAdsbUpdate = lastRadarUpdate = millis();
@@ -390,10 +417,11 @@ void loop() {
       due(now, lastRadarUpdate, Config::RADAR_REFRESH_MS)) {
     lastRadarUpdate = now;
     if (radar.updateFrames()) {
-      prepareRadarAnimation();
+      if (!radar.animationCacheReady()) prepareRadarAnimation();
       radarFrame = 0;
       lastRadarAnimation = now;
       mapDirty = true;
+      displayResyncPending = true;
     }
   }
 
@@ -425,6 +453,12 @@ void loop() {
 
   if (mapDirty) redrawMap();
 
+  if (displayResyncPending) {
+    delay(25);
+    requestDisplaySyncRecovery("flash/RAM operation complete");
+    displayResyncPending = false;
+  }
+
   if (due(now, lastHeaderUpdate, 2000)) {
     lastHeaderUpdate = now;
     updateHeader();
@@ -435,6 +469,7 @@ void loop() {
   if (mapViewSavePending && due(now, lastMapViewChange, 1500)) {
     saveMapViewport();
     delay(20);
+    displayResyncPending = true;
   }
 
   // Periodic output remains visible even when the serial monitor is opened
