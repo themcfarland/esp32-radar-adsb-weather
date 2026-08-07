@@ -8,6 +8,7 @@
 
 #include "adsb_service.h"
 #include "astronomy_service.h"
+#include "barometer_service.h"
 #include "config.h"
 #include "debug_log.h"
 #include "device_config.h"
@@ -19,6 +20,7 @@
 
 AdsbService adsb("");
 AstronomyService astronomy;
+BarometerService barometer;
 WeatherService weather("", "");
 RadarService radar;
 DeviceConfigService deviceConfig;
@@ -36,6 +38,7 @@ uint32_t lastRadarAnimation = 0;
 uint32_t lastCurrentWeatherUpdate = 0;
 uint32_t lastForecastUpdate = 0;
 uint32_t lastAstronomyUpdate = 0;
+uint32_t lastBarometerUpdate = 0;
 uint32_t lastWifiRetry = 0;
 uint32_t lastHeaderUpdate = 0;
 uint32_t lastDebugHeartbeat = 0;
@@ -54,11 +57,25 @@ bool backlightOn = true;
 bool backlightScheduledWindowActive = true;
 bool backlightTemporaryWake = false;
 uint32_t backlightWakeUntil = 0;
+bool barometerInitialized = false;
+String barometerWuStationId;
+bool startupScreenActive = false;
 
 namespace {
 bool isUnsetValue(const String& value) {
   return value.isEmpty() || value.indexOf("YOUR_") >= 0 ||
          value.indexOf("CHANGE_ME") >= 0;
+}
+
+void startupStatus(const char* message, uint8_t progressPercent) {
+  if (!startupScreenActive) return;
+  lvgl_port_lock(-1);
+  UI::updateStartupStatus(message, progressPercent);
+  lvgl_port_unlock();
+  DebugLog::printf("STARTUP %u%%: %s\n",
+                   static_cast<unsigned>(progressPercent),
+                   message ? message : "");
+  delay(12);
 }
 
 bool weatherConfigured() {
@@ -67,20 +84,52 @@ bool weatherConfigured() {
          !settings.wuStationId.isEmpty();
 }
 
+bool updateBarometerSample(uint32_t nowMs) {
+  const CurrentWeather& current = weather.snapshot().current;
+  barometer.setWindDirection(current.valid ? current.windDirectionDeg : NAN);
+  if (current.valid) {
+    barometer.setOutdoorTemperature(current.temperatureC, current.epoch);
+  }
+
+  // GT911 is polled by the LVGL task on the same physical I2C bus. Holding
+  // the LVGL mutex pauses touch transactions while the BMP180 performs its
+  // temperature and pressure conversions.
+  if (!lvgl_port_lock(500)) {
+    DebugLog::println("Barometer: shared I2C lock timeout");
+    return false;
+  }
+  const bool updated = barometer.update(nowMs);
+  lvgl_port_unlock();
+  return updated;
+}
+
 void applyDeviceSettings() {
   const DeviceSettings& settings = deviceConfig.settings();
   adsb.setAircraftUrl(settings.adsbUrl);
   weather.setConfig(settings.wuApiKey, settings.wuStationId);
+  if (barometerWuStationId != settings.wuStationId) {
+    barometer.clearOutdoorTemperatureHistory();
+    barometerWuStationId = settings.wuStationId;
+    DebugLog::println("Barometer: WU temperature history cleared after station change");
+  }
   aircraftAlert = deviceConfig.alertConfig();
   radarLayerEnabled = settings.radarLayerEnabled;
   adsbLayerEnabled = settings.adsbLayerEnabled;
+  if (barometerInitialized) {
+    lvgl_port_lock(-1);
+    barometer.configure(settings.barometerEnabled,
+                        settings.barometerAltitudeM,
+                        settings.barometerOffsetHpa);
+    lvgl_port_unlock();
+  }
   DebugLog::printf(
-      "Runtime config: ADSB=%s WU=%s layers=radar:%d adsb:%d alerts=%s [%s|%s|%s] backlightSchedule=%s\n",
+      "Runtime config: ADSB=%s WU=%s layers=radar:%d adsb:%d alerts=%s [%s|%s|%s] backlightSchedule=%s barometer=%s\n",
       settings.adsbUrl.c_str(), settings.wuStationId.c_str(),
       radarLayerEnabled ? 1 : 0, adsbLayerEnabled ? 1 : 0,
       aircraftAlert.enabled ? "on" : "off", aircraftAlert.targets[0],
       aircraftAlert.targets[1], aircraftAlert.targets[2],
-      settings.backlightScheduleEnabled ? "on" : "off");
+      settings.backlightScheduleEnabled ? "on" : "off",
+      settings.barometerEnabled ? "on" : "off");
 }
 
 MapZoomMode storedZoomMode(uint8_t raw) {
@@ -309,6 +358,7 @@ void updateRuntimeDiagnostics() {
   const AircraftSnapshot& aircraft = adsb.snapshot();
   const WeatherSnapshot& weatherData = weather.snapshot();
   const AstronomySnapshot& astronomyData = astronomy.snapshot();
+  const BarometerSnapshot& barometerData = barometer.snapshot();
 
   runtimeDiagnostics.uptimeMs = now;
   runtimeDiagnostics.lastAdsbUpdateMs = lastAdsbUpdate;
@@ -316,6 +366,7 @@ void updateRuntimeDiagnostics() {
   runtimeDiagnostics.lastCurrentWeatherUpdateMs = lastCurrentWeatherUpdate;
   runtimeDiagnostics.lastForecastUpdateMs = lastForecastUpdate;
   runtimeDiagnostics.lastAstronomyUpdateMs = lastAstronomyUpdate;
+  runtimeDiagnostics.lastBarometerUpdateMs = lastBarometerUpdate;
   runtimeDiagnostics.lastDisplaySyncRecoveryMs = lastDisplaySyncRecovery;
   runtimeDiagnostics.lcdResyncCount = lcdResyncCount;
   runtimeDiagnostics.mapRedrawCount = mapRedrawCount;
@@ -326,8 +377,53 @@ void updateRuntimeDiagnostics() {
   runtimeDiagnostics.aircraftCount = aircraft.count;
   runtimeDiagnostics.radarCacheReady = radar.animationCacheReady();
   runtimeDiagnostics.currentWeatherValid = weatherData.current.valid;
+  runtimeDiagnostics.weatherPressureHpa =
+      weatherData.current.valid ? weatherData.current.pressureHpa : NAN;
   runtimeDiagnostics.forecastValid = weatherData.forecastValid;
   runtimeDiagnostics.astronomyValid = astronomyData.valid;
+  runtimeDiagnostics.barometerEnabled = barometerData.enabled;
+  runtimeDiagnostics.barometerDetected = barometerData.detected;
+  runtimeDiagnostics.barometerValid = barometerData.valid;
+  runtimeDiagnostics.barometerAddress = barometerData.i2cAddress;
+  runtimeDiagnostics.barometerPressureHpa = barometerData.pressureHpa;
+  runtimeDiagnostics.barometerRawPressureHpa = barometerData.rawPressureHpa;
+  runtimeDiagnostics.barometerTemperatureC = barometerData.temperatureC;
+  runtimeDiagnostics.barometerReductionTemperatureC =
+      barometerData.reductionTemperatureC;
+  runtimeDiagnostics.wuTemperatureAverageC =
+      barometerData.wuTemperatureAverageC;
+  runtimeDiagnostics.wuTemperatureSampleCount =
+      barometerData.wuTemperatureSampleCount;
+  runtimeDiagnostics.wuTemperatureSpanHours =
+      barometerData.wuTemperatureSpanHours;
+  runtimeDiagnostics.wuTemperatureLatestEpoch =
+      barometerData.wuTemperatureLatestEpoch;
+  strlcpy(runtimeDiagnostics.barometerReductionTemperatureSource,
+          barometerData.reductionTemperatureSource,
+          sizeof(runtimeDiagnostics.barometerReductionTemperatureSource));
+  runtimeDiagnostics.barometerDelta3hHpa = barometerData.delta3hHpa;
+  runtimeDiagnostics.barometerTrendHpaPerHour = barometerData.trendHpaPerHour;
+  runtimeDiagnostics.pressureHistoryCount = barometerData.historyCount;
+  runtimeDiagnostics.zambrettiReady = barometerData.zambrettiReady;
+  runtimeDiagnostics.zambrettiWindUsed = barometerData.zambrettiWindUsed;
+  runtimeDiagnostics.zambrettiSeasonApplied =
+      barometerData.zambrettiSeasonApplied;
+  runtimeDiagnostics.zambrettiAdjustedPressureHpa =
+      barometerData.zambrettiAdjustedPressureHpa;
+  runtimeDiagnostics.zambrettiWindDirectionDeg =
+      barometerData.zambrettiWindDirectionDeg;
+  strlcpy(runtimeDiagnostics.zambrettiCode, barometerData.zambrettiCode,
+          sizeof(runtimeDiagnostics.zambrettiCode));
+  strlcpy(runtimeDiagnostics.zambrettiTrend, barometerData.zambrettiTrend,
+          sizeof(runtimeDiagnostics.zambrettiTrend));
+  strlcpy(runtimeDiagnostics.barometerSensor, barometerData.sensorName,
+          sizeof(runtimeDiagnostics.barometerSensor));
+  strlcpy(runtimeDiagnostics.barometerTrend, barometerData.trendText,
+          sizeof(runtimeDiagnostics.barometerTrend));
+  strlcpy(runtimeDiagnostics.barometerForecast, barometerData.forecastText,
+          sizeof(runtimeDiagnostics.barometerForecast));
+  strlcpy(runtimeDiagnostics.barometerStatus, barometerData.status,
+          sizeof(runtimeDiagnostics.barometerStatus));
   runtimeDiagnostics.backlightOn = backlightOn;
   runtimeDiagnostics.backlightScheduleEnabled =
       deviceConfig.settings().backlightScheduleEnabled;
@@ -383,6 +479,12 @@ void updateHeader() {
 void updateWeatherUi() {
   lvgl_port_lock(-1);
   UI::updateWeather(weather.snapshot());
+  lvgl_port_unlock();
+}
+
+void updatePressureUi() {
+  lvgl_port_lock(-1);
+  UI::updatePressure(barometer.snapshot());
   lvgl_port_unlock();
 }
 
@@ -465,9 +567,13 @@ void redrawMap() {
 }
 
 void performInitialUpdates() {
-  if (!deviceConfig.stationConnected()) return;
+  if (!deviceConfig.stationConnected()) {
+    startupStatus("Wi-Fi data nejsou dostupna; konfiguracni AP je pripraveno", 88);
+    return;
+  }
 
   DebugLog::println("Initial weather update started");
+  startupStatus("Nacitam aktualni pocasi z Weather Underground...", 68);
   if (weatherConfigured()) {
     weather.updateCurrent();
   } else {
@@ -475,12 +581,21 @@ void performInitialUpdates() {
   }
   // Forecast always runs. WU is attempted when a key is present and
   // Open-Meteo remains available without a WU subscription.
+  startupStatus("Nacitam predpoved +3 / +6 / +9 hodin...", 75);
   weather.updateForecast();
   updateWeatherUi();
   lastCurrentWeatherUpdate = millis();
   lastForecastUpdate = millis();
+  if (barometerInitialized) {
+    startupStatus("Aktualizuji tlak a Zambretti predpoved...", 81);
+    updateBarometerSample(millis());
+    lastBarometerUpdate = millis();
+    updatePressureUi();
+  }
+  startupStatus("Pocitam Slunce, Mesic a astronomicke udaje...", 86);
   updateAstronomy();
 
+  startupStatus("Nacitam letouny ADS-B...", 91);
   Serial.println("Loading local ADS-B aircraft.json...");
   adsb.update();
   lastAdsbUpdate = millis();
@@ -516,36 +631,85 @@ void setup() {
   lastRadarAnimation = millis();
 
   lcd_init();
+  // lcd_init() leaves the CH422G backlight output high. Keep it on throughout
+  // the startup presentation; the weekly schedule is applied after the main
+  // screen becomes active.
+  lcdBacklightState = 1;
+  backlightOn = true;
+
+  lvgl_port_lock(-1);
+  startupScreenActive = UI::beginStartup(FW_VERSION);
+  lvgl_port_unlock();
+  startupStatus("Kontroluji rozliseni a ovladac LCD...", 5);
   if (!validateDisplay()) {
+    lvgl_port_lock(-1);
+    UI::completeStartup("Chyba LCD: ocekavano 800 x 480", false);
+    lvgl_port_unlock();
     while (true) delay(1000);
   }
+
+  startupStatus(deviceConfig.stationConnected()
+                    ? "Wi-Fi je pripojena; webove nastaveni je aktivni"
+                    : "Spusten konfiguracni pristupovy bod Wi-Fi",
+                12);
+  startupStatus("Pripravuji grafiku, mapu a obrazove buffery...", 20);
   lvgl_port_lock(-1);
   const bool uiOk = UI::begin();
   lvgl_port_unlock();
   if (!uiOk) {
+    lvgl_port_lock(-1);
+    UI::completeStartup("Nedostatek pameti pro mapu", false);
+    lvgl_port_unlock();
     Serial.println("Fatal: map canvas allocation failed. Check PSRAM settings.");
     while (true) delay(1000);
   }
-  // lcd_init() leaves the CH422G backlight output high. Keep the software
-  // state synchronized before applying the weekly schedule.
-  lcdBacklightState = 1;
-  backlightOn = true;
-  updateBacklightControl(millis());
+
+  // lcd_init() has initialized the shared I2C bus used by touch, CH422G and the
+  // external connector. Detect the optional pressure sensor only afterwards.
+  startupStatus("Hledam barometr na sbernici I2C...", 38);
+  const DeviceSettings& initialSettings = deviceConfig.settings();
+  barometerInitialized = true;
+  lvgl_port_lock(-1);
+  barometer.begin(initialSettings.barometerEnabled,
+                   initialSettings.barometerAltitudeM,
+                   initialSettings.barometerOffsetHpa);
+  lvgl_port_unlock();
+  // When Wi-Fi is already connected, wait for the first WU observation before
+  // accepting the initial pressure-history point. Offline startup still uses
+  // the documented 15 C fallback immediately.
+  if (!deviceConfig.stationConnected()) {
+    updateBarometerSample(millis());
+    lastBarometerUpdate = millis();
+  }
+  updatePressureUi();
 
   // The LCD and map buffers now own their final PSRAM blocks. Convert each PNG
   // once to a compact 8-bit overlay; animation never decodes PNG again.
+  startupStatus("Pripravuji radarovou animaci v PSRAM...", 48);
   prepareRadarAnimation();
   radar.setDisplayActive(true);
   DebugLog::println("Radar runtime mode: RAM-only, LittleFS writes disabled");
+  startupStatus("Skladam zakladni mapu Ceske republiky...", 60);
   updateHeader();
   redrawMap();
 
   performInitialUpdates();
   lastNetworkConnected = deviceConfig.stationConnected();
+  startupStatus("Dokoncuji rozhrani a diagnostiku...", 96);
   updateHeader();
   redrawMap();
 
   updateRuntimeDiagnostics();
+  lvgl_port_lock(-1);
+  UI::completeStartup("System je pripraven", true);
+  lvgl_port_unlock();
+  delay(1200);
+  lvgl_port_lock(-1);
+  UI::showMainScreen();
+  lvgl_port_unlock();
+  startupScreenActive = false;
+  updateBacklightControl(millis());
+
   Serial.printf("Startup complete | heap %u kB | PSRAM %u kB\n",
                 static_cast<unsigned>(ESP.getFreeHeap() / 1024),
                 static_cast<unsigned>(ESP.getFreePsram() / 1024));
@@ -565,6 +729,9 @@ void loop() {
     const bool previousAdsbLayer = adsbLayerEnabled;
     const AircraftAlertConfig previousAlert = aircraftAlert;
     applyDeviceSettings();
+    updateBarometerSample(now);
+    lastBarometerUpdate = now;
+    updatePressureUi();
 
     bool alertDisplayChanged = previousAlert.enabled != aircraftAlert.enabled;
     for (size_t slot = 0; slot < AIRCRAFT_ALERT_SLOT_COUNT; ++slot) {
@@ -612,6 +779,9 @@ void loop() {
     updateWeatherUi();
     updateAstronomy();
     adsb.update();
+    updateBarometerSample(millis());
+    lastBarometerUpdate = millis();
+    updatePressureUi();
     if (radar.updateFrames()) {
       if (!radar.animationCacheReady()) prepareRadarAnimation();
       displayResyncPending = true;
@@ -648,6 +818,11 @@ void loop() {
     lastCurrentWeatherUpdate = now;
     weather.updateCurrent();
     updateWeatherUi();
+    if (barometerInitialized) {
+      updateBarometerSample(now);
+      lastBarometerUpdate = now;
+      if (backlightOn) updatePressureUi();
+    }
   }
 
   if (deviceConfig.stationConnected() &&
@@ -655,6 +830,12 @@ void loop() {
     lastForecastUpdate = now;
     weather.updateForecast();
     updateWeatherUi();
+  }
+
+  if (due(now, lastBarometerUpdate, Config::BAROMETER_REFRESH_MS)) {
+    lastBarometerUpdate = now;
+    updateBarometerSample(now);
+    if (backlightOn) updatePressureUi();
   }
 
   if (due(now, lastAstronomyUpdate, Config::ASTRONOMY_REFRESH_MS)) {
@@ -696,7 +877,7 @@ void loop() {
     lastDebugHeartbeat = now;
     const WeatherSnapshot& ws = weather.snapshot();
     DebugLog::printf(
-        "HEARTBEAT ms=%u WiFi=%d AP=%d heap=%u kB forecast=%s cards=%u layers=R%d/A%d alerts=%s [%s|%s|%s] BL=%d schedule=%d wake=%d\n",
+        "HEARTBEAT ms=%u WiFi=%d AP=%d heap=%u kB forecast=%s cards=%u layers=R%d/A%d alerts=%s [%s|%s|%s] BL=%d schedule=%d wake=%d baro=%s %.1f hPa d3h=%+.1f Z=%s\n",
         static_cast<unsigned>(now),
         deviceConfig.stationConnected() ? 1 : 0,
         deviceConfig.portalActive() ? 1 : 0,
@@ -707,7 +888,11 @@ void loop() {
         aircraftAlert.enabled ? "on" : "off", aircraftAlert.targets[0],
         aircraftAlert.targets[1], aircraftAlert.targets[2],
         backlightOn ? 1 : 0, backlightScheduledWindowActive ? 1 : 0,
-        backlightTemporaryWake ? 1 : 0);
+        backlightTemporaryWake ? 1 : 0,
+        barometer.snapshot().sensorName,
+        barometer.snapshot().valid ? barometer.snapshot().pressureHpa : NAN,
+        barometer.snapshot().delta3hHpa,
+        barometer.snapshot().zambrettiCode);
   }
 
   delay(5);

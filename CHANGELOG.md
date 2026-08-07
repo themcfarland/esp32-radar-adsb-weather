@@ -1,4 +1,100 @@
+## 0.28.0 - Altitude calibration helper
+
+### Added
+- Web calibration helper that derives sensor altitude from the current raw BMP180 pressure, a reference sea-level pressure and the WU outdoor temperature used for pressure reduction.
+- Button for loading the current WU sea-level pressure into the calibration form.
+- Configured altitude, MSL fine correction and WU reference pressure in diagnostics and `/api/diagnostics`.
+
+### Changed
+- Renamed the pressure offset field to clarify that it is a fine MSL correction applied after altitude reduction.
+- The calibration helper resets the fine correction to zero so altitude remains the primary physical correction.
+- The three-hour tendency continues to use unreduced station pressure and is not affected by altitude calibration.
+
 # Changelog
+
+## 0.27.0 - BMP180 on shared display I2C
+
+### Fixed
+- BMP180 detection now reuses the ESP-IDF I2C0 bus already initialized by the Waveshare display, GT911 touch and CH422G expander.
+- Removed the previous Arduino `Wire` probe, which was never initialized by the display library and therefore returned no sensor.
+- Added BMP180 chip-ID, calibration and first-measurement validation with four startup retries.
+- Added clear serial and web diagnostic messages for no ACK, wrong chip ID and invalid calibration.
+
+### Changed
+- The barometer implementation is now dedicated to the confirmed BMP180 at address `0x77`.
+- BMP180 temperature and pressure compensation is performed locally from the Bosch factory calibration registers.
+- Touch polling is paused with the LVGL mutex during each BMP180 transaction sequence to avoid concurrent access to the shared bus.
+- Removed unused Adafruit BMP085/BMP280/BME280 dependencies.
+
+### Preserved
+- WU outdoor-temperature reduction, 24-hour pressure graph and Zambretti forecast remain unchanged.
+- The firmware does not call `Wire.begin()` and does not reinstall or reconfigure the display I2C controller.
+
+## 0.26.0 - Startup screen
+
+### Added
+- Full-screen startup presentation after LCD initialization.
+- Animated eight-dot loading indicator and percentage progress bar.
+- One-line live status for LCD, Wi-Fi/AP, UI buffers, I2C barometer, radar, weather, astronomy and ADS-B initialization.
+- Firmware version and `Vytvoril OK5TVR` credit on the startup screen.
+- Final green `OK` state before switching to the main dashboard.
+
+### Changed
+- The main LVGL screen is built off-screen while the startup screen remains visible.
+- The weekly backlight schedule is applied after the startup presentation, so boot progress remains visible.
+
+## 0.25.0 - WU outdoor temperature pressure reduction
+
+### Changed
+- Sea-level pressure conversion now uses a RAM-only rolling average of outdoor Weather Underground temperature over up to 12 hours.
+- Duplicate WU observations are ignored by observation epoch.
+- The three-hour tendency is calculated from unreduced station pressure, preventing outdoor-temperature changes from creating a false trend.
+- The pressure graph and Zambretti continue to use sea-level pressure.
+- Standard 15 C is used when WU temperature is unavailable or older than 12 hours; indoor barometer temperature is diagnostic only.
+
+### Added
+- Reduction temperature, source, WU average, sample count, averaging span and observation age in web diagnostics and JSON API.
+
+## 0.24.0 - Zambretti local forecast
+
+### Added
+- Classic Zambretti forecast with A-Z condition codes and Czech display texts.
+- Seasonal Northern-Hemisphere correction based on the local NTP month.
+- Optional 16-point wind-direction correction using current Weather Underground wind direction.
+- Zambretti code, trend class, wind use and seasonal correction in diagnostics and JSON API.
+- Host-side reference tests for representative Zambretti cases.
+
+### Changed
+- Replaced the previous threshold-only local weather text with Zambretti output.
+- Sea-level pressure conversion now includes measured sensor temperature.
+- The display waits for an almost complete three-hour pressure window before publishing a local forecast.
+- Five-minute history point timestamps remain fixed, preventing compression of the regression time axis by one-minute sensor refreshes.
+- The pressure panel title and summary now identify the Zambretti result explicitly.
+
+### Notes
+- Internet cards remain numerical forecasts for +3, +6 and +9 hours.
+- Zambretti is a categorical local short-range forecast; the dashed pressure line remains a trend projection, not a numerical Zambretti pressure forecast.
+- Wind correction is omitted automatically when no valid WU wind direction is available.
+
+## 0.23.0 - I2C barometer and pressure trend
+
+### Added
+- Automatic detection of BMP180, BMP280 and BME280 sensors at I2C addresses 0x76/0x77.
+- Sea-level pressure conversion using configurable sensor altitude and pressure offset.
+- One-minute pressure sampling and a RAM-only 24-hour history with five-minute graph points.
+- Three-hour linear-regression pressure trend, three-hour delta and local short-term weather indication.
+- Dashed pressure projection for +3, +6 and +9 hours.
+- Barometer configuration on the main web page and live barometer diagnostics.
+
+### Changed
+- Internet forecast cards are reduced to +3, +6 and +9 hours.
+- The freed sidebar area is used for a 24-hour pressure chart and local pressure forecast.
+- Forecast data requests are reduced to the first 12 hours.
+
+### Safety
+- Pressure history is held only in RAM and creates no periodic flash writes.
+- Trend projection remains hidden until at least 45 minutes of valid observations are available.
+- The local pressure forecast is explicitly documented as indicative, not an official forecast.
 
 ## 0.22.0 - Weekly backlight schedule
 

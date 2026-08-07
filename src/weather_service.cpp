@@ -12,7 +12,7 @@
 #include "debug_log.h"
 
 namespace {
-constexpr uint8_t kForecastHours[6] = {3, 6, 9, 12, 24, 48};
+constexpr uint8_t kForecastHours[3] = {3, 6, 9};
 
 bool getHttpsJson(const String& url, DynamicJsonDocument& doc, int& httpCode) {
   WiFiClientSecure client;
@@ -55,8 +55,8 @@ size_t selectForecastIndex(JsonArrayConst validTimes, uint8_t hoursAhead,
       if (epoch >= target) return i;
     }
 
-    // A 48-hour product can end shortly before the exact now+48 h target
-    // because values are aligned to complete hours. Use the last value then.
+    // The requested product can end shortly before the exact target because
+    // values are aligned to complete hours. Use the last valid value then.
     for (size_t i = validTimes.size(); i > 0; --i) {
       if (!validTimes[i - 1].isNull()) return i - 1;
     }
@@ -181,6 +181,7 @@ bool WeatherService::fetchCurrent() {
   snapshot_.current.temperatureC = metric["temp"] | NAN;
   snapshot_.current.windKph = metric["windSpeed"] | NAN;
   snapshot_.current.gustKph = metric["windGust"] | NAN;
+  snapshot_.current.windDirectionDeg = obs["winddir"] | NAN;
   snapshot_.current.pressureHpa = metric["pressure"] | NAN;
   snapshot_.current.rainRateMmH = metric["precipRate"] | NAN;
   snapshot_.current.humidityPct = obs["humidity"] | NAN;
@@ -236,7 +237,7 @@ bool WeatherService::fetchHourlyForecast(const char* duration, int& httpCode) {
   filter["temperature"][0] = true;
   filter["precipChance"][0] = true;
 
-  DynamicJsonDocument doc(22 * 1024);
+  DynamicJsonDocument doc(14 * 1024);
   const DeserializationError err = deserializeJson(
       doc, http.getStream(), DeserializationOption::Filter(filter));
   http.end();
@@ -256,7 +257,7 @@ bool WeatherService::fetchHourlyForecast(const char* duration, int& httpCode) {
       std::min(temperatures.size(), precipitation.size()));
   DebugLog::printf("Forecast WU %s: parsed %u hourly records\n", duration,
                    static_cast<unsigned>(available));
-  if (available < 48) {
+  if (available < 10) {
     httpCode = -3;
     return false;
   }
@@ -268,7 +269,7 @@ bool WeatherService::fetchHourlyForecast(const char* duration, int& httpCode) {
                                 : 0;
   uint8_t validSlots = 0;
 
-  for (size_t slotIndex = 0; slotIndex < 6; ++slotIndex) {
+  for (size_t slotIndex = 0; slotIndex < 3; ++slotIndex) {
     const uint8_t hoursAhead = kForecastHours[slotIndex];
     const size_t sourceIndex = selectForecastIndex(times, hoursAhead, nowEpoch);
     if (sourceIndex == SIZE_MAX || sourceIndex >= available) continue;
@@ -283,8 +284,8 @@ bool WeatherService::fetchHourlyForecast(const char* duration, int& httpCode) {
     ++validSlots;
   }
 
-  if (validSlots != 6) {
-    DebugLog::printf("Forecast WU %s: only %u/6 cards selected\n", duration,
+  if (validSlots != 3) {
+    DebugLog::printf("Forecast WU %s: only %u/3 cards selected\n", duration,
                      static_cast<unsigned>(validSlots));
     httpCode = -4;
     clearForecast();
@@ -305,7 +306,7 @@ bool WeatherService::fetchOpenMeteoForecast(int& httpCode) {
       "https://api.open-meteo.com/v1/forecast?latitude=" + latitude +
       "&longitude=" + longitude +
       "&hourly=temperature_2m,precipitation_probability,weather_code"
-      "&forecast_hours=55&timeformat=unixtime&timezone=GMT";
+      "&forecast_hours=12&timeformat=unixtime&timezone=GMT";
 
   DebugLog::printf("Forecast Open-Meteo: request started for %s,%s\n",
                    latitude.c_str(), longitude.c_str());
@@ -339,7 +340,7 @@ bool WeatherService::fetchOpenMeteoForecast(int& httpCode) {
   }
 
   // getString() lets HTTPClient remove transport framing before ArduinoJson
-  // sees the data. The 55-hour response is only a few kilobytes and the
+  // sees the data. The 12-hour response is only a few kilobytes and the
   // forecast is downloaded once per hour.
   String payload = http.getString();
   http.end();
@@ -364,7 +365,7 @@ bool WeatherService::fetchOpenMeteoForecast(int& httpCode) {
     return false;
   }
 
-  DynamicJsonDocument doc(28 * 1024);
+  DynamicJsonDocument doc(14 * 1024);
   const DeserializationError err = deserializeJson(doc, payload);
   if (err) {
     DebugLog::printf("Forecast Open-Meteo: JSON error %s, body: %s\n",
@@ -385,7 +386,7 @@ bool WeatherService::fetchOpenMeteoForecast(int& httpCode) {
       std::min(precipitation.size(), weatherCodes.size()));
   DebugLog::printf("Forecast Open-Meteo: parsed %u hourly records\n",
                    static_cast<unsigned>(available));
-  if (available < 49) {
+  if (available < 10) {
     httpCode = -3;
     return false;
   }
@@ -397,7 +398,7 @@ bool WeatherService::fetchOpenMeteoForecast(int& httpCode) {
                                 : 0;
   uint8_t validSlots = 0;
 
-  for (size_t slotIndex = 0; slotIndex < 6; ++slotIndex) {
+  for (size_t slotIndex = 0; slotIndex < 3; ++slotIndex) {
     const uint8_t hoursAhead = kForecastHours[slotIndex];
     const size_t sourceIndex = selectForecastIndex(times, hoursAhead, nowEpoch);
     if (sourceIndex == SIZE_MAX || sourceIndex >= available) continue;
@@ -412,8 +413,8 @@ bool WeatherService::fetchOpenMeteoForecast(int& httpCode) {
     ++validSlots;
   }
 
-  if (validSlots != 6) {
-    DebugLog::printf("Forecast Open-Meteo: only %u/6 cards selected\n",
+  if (validSlots != 3) {
+    DebugLog::printf("Forecast Open-Meteo: only %u/3 cards selected\n",
                      static_cast<unsigned>(validSlots));
     httpCode = -4;
     clearForecast();

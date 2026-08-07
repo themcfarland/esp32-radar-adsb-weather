@@ -25,6 +25,9 @@ struct DeviceSettings {
   bool aircraftAlertEnabled = false;
   String aircraftAlertTargets[AIRCRAFT_ALERT_SLOT_COUNT];
   bool backlightScheduleEnabled = true;
+  bool barometerEnabled = true;
+  float barometerAltitudeM = 0.0f;
+  float barometerOffsetHpa = 0.0f;
   BacklightDaySchedule backlightDays[BACKLIGHT_DAY_COUNT];
 };
 

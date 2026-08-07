@@ -51,6 +51,8 @@ constexpr uint32_t RADAR_ANIMATION_MS = 1400;
 constexpr uint32_t CURRENT_WEATHER_REFRESH_MS = 5UL * 60UL * 1000UL;
 constexpr uint32_t FORECAST_REFRESH_MS = 60UL * 60UL * 1000UL;
 constexpr uint32_t ASTRONOMY_REFRESH_MS = 60UL * 1000UL;
+constexpr uint32_t BAROMETER_REFRESH_MS = 60UL * 1000UL;
+constexpr uint32_t PRESSURE_HISTORY_STEP_MS = 5UL * 60UL * 1000UL;
 constexpr uint32_t WIFI_RETRY_MS = 15UL * 1000UL;
 
 constexpr char CONFIG_HOSTNAME[] = "radar-adsb";
@@ -59,6 +61,8 @@ constexpr char CONFIG_AP_PASSWORD[] = "radarsetup";
 
 constexpr size_t MAX_AIRCRAFT = 80;
 constexpr uint32_t AIRCRAFT_MAX_AGE_SEC = 30;
+constexpr uint8_t I2C_SDA_PIN = 8;
+constexpr uint8_t I2C_SCL_PIN = 9;
 
 constexpr char TZ_INFO[] = "CET-1CEST,M3.5.0/2,M10.5.0/3";
 

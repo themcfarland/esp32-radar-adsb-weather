@@ -11,8 +11,14 @@ class WeatherService {
   bool updateCurrent();
   bool updateForecast();
   void setConfig(const String& apiKey, const String& stationId) {
+    const bool stationChanged = stationId_ != stationId;
     apiKey_ = apiKey;
     stationId_ = stationId;
+    if (stationChanged) {
+      // Never expose the previous station's outdoor temperature to the
+      // barometer after a runtime station change.
+      snapshot_.current = CurrentWeather{};
+    }
   }
   const WeatherSnapshot& snapshot() const { return snapshot_; }
 

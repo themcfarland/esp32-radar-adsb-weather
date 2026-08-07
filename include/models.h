@@ -55,6 +55,7 @@ struct CurrentWeather {
   float pressureHpa = NAN;
   float windKph = NAN;
   float gustKph = NAN;
+  float windDirectionDeg = NAN;
   float rainRateMmH = NAN;
   uint32_t epoch = 0;
 };
@@ -69,7 +70,7 @@ struct ForecastSlot {
 
 struct WeatherSnapshot {
   CurrentWeather current;
-  ForecastSlot slots[6];
+  ForecastSlot slots[3];
   float stationLat = Config::FALLBACK_LAT;
   float stationLon = Config::FALLBACK_LON;
   bool forecastValid = false;
@@ -79,6 +80,52 @@ struct WeatherSnapshot {
 };
 
 
+
+constexpr size_t PRESSURE_HISTORY_POINT_COUNT = 289;
+
+struct PressurePoint {
+  uint32_t timestampMs = 0;
+  // Sea-level pressure is shown in the 24-hour graph.
+  float pressureHpa = NAN;
+  // Unreduced station pressure drives the three-hour trend so changing
+  // outdoor temperature cannot create a false pressure tendency.
+  float stationPressureHpa = NAN;
+};
+
+struct BarometerSnapshot {
+  bool enabled = true;
+  bool detected = false;
+  bool valid = false;
+  uint8_t i2cAddress = 0;
+  float rawPressureHpa = NAN;
+  float pressureHpa = NAN;
+  float temperatureC = NAN;
+  float reductionTemperatureC = 15.0f;
+  float wuTemperatureAverageC = NAN;
+  uint16_t wuTemperatureSampleCount = 0;
+  float wuTemperatureSpanHours = 0.0f;
+  uint32_t wuTemperatureLatestEpoch = 0;
+  char reductionTemperatureSource[24] = "standard 15 C";
+  float trendHpaPerHour = 0.0f;
+  float delta3hHpa = NAN;
+  float projectedPressureHpa[3] = {NAN, NAN, NAN};
+  PressurePoint history[PRESSURE_HISTORY_POINT_COUNT];
+  size_t historyCount = 0;
+  uint32_t historyRevision = 0;
+  uint32_t sampleCount = 0;
+  char sensorName[20] = "nenalezen";
+  bool zambrettiReady = false;
+  bool zambrettiWindUsed = false;
+  bool zambrettiSeasonApplied = false;
+  float zambrettiAdjustedPressureHpa = NAN;
+  float zambrettiWindDirectionDeg = NAN;
+  char zambrettiCode[3] = "-";
+  char zambrettiTrend[16] = "sbiram";
+  char trendText[32] = "sbiram data";
+  char forecastText[80] = "Zambretti zatim neni k dispozici";
+  char status[96] = "Barometr: cekam";
+};
+
 struct RuntimeDiagnostics {
   uint32_t uptimeMs = 0;
   uint32_t lastAdsbUpdateMs = 0;
@@ -86,6 +133,7 @@ struct RuntimeDiagnostics {
   uint32_t lastCurrentWeatherUpdateMs = 0;
   uint32_t lastForecastUpdateMs = 0;
   uint32_t lastAstronomyUpdateMs = 0;
+  uint32_t lastBarometerUpdateMs = 0;
   uint32_t lastDisplaySyncRecoveryMs = 0;
   uint32_t lcdResyncCount = 0;
   uint32_t mapRedrawCount = 0;
@@ -96,8 +144,12 @@ struct RuntimeDiagnostics {
   size_t aircraftCount = 0;
   bool radarCacheReady = false;
   bool currentWeatherValid = false;
+  float weatherPressureHpa = NAN;
   bool forecastValid = false;
   bool astronomyValid = false;
+  bool barometerEnabled = true;
+  bool barometerDetected = false;
+  bool barometerValid = false;
   bool timeSynchronized = false;
   bool backlightOn = true;
   bool backlightScheduleEnabled = true;
@@ -113,6 +165,30 @@ struct RuntimeDiagnostics {
   char astronomyStatus[48] = "Astronomy: waiting";
   char forecastProduct[16] = "--";
   char mapView[24] = "cela CR";
+  uint8_t barometerAddress = 0;
+  float barometerPressureHpa = NAN;
+  float barometerRawPressureHpa = NAN;
+  float barometerTemperatureC = NAN;
+  float barometerReductionTemperatureC = 15.0f;
+  float wuTemperatureAverageC = NAN;
+  uint16_t wuTemperatureSampleCount = 0;
+  float wuTemperatureSpanHours = 0.0f;
+  uint32_t wuTemperatureLatestEpoch = 0;
+  char barometerReductionTemperatureSource[24] = "standard 15 C";
+  float barometerDelta3hHpa = NAN;
+  float barometerTrendHpaPerHour = 0.0f;
+  size_t pressureHistoryCount = 0;
+  char barometerSensor[20] = "nenalezen";
+  bool zambrettiReady = false;
+  bool zambrettiWindUsed = false;
+  bool zambrettiSeasonApplied = false;
+  float zambrettiAdjustedPressureHpa = NAN;
+  float zambrettiWindDirectionDeg = NAN;
+  char zambrettiCode[3] = "-";
+  char zambrettiTrend[16] = "sbiram";
+  char barometerTrend[32] = "sbiram data";
+  char barometerForecast[80] = "--";
+  char barometerStatus[96] = "Barometr: cekam";
 };
 
 struct AstronomySnapshot {

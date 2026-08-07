@@ -1,45 +1,218 @@
-# Waveshare 7" Radar CR + ADS-B + pocasi
+# Waveshare 7" Radar ČR + ADS-B + počasí
 
-Firmware pro puvodni desku **Waveshare ESP32-S3-Touch-LCD-7**
-(800 x 480, ST7262, GT911, CH422G, 8 MB OPI PSRAM).
+Firmware pro původní desku **Waveshare ESP32-S3-Touch-LCD-7**
+(800 × 480, ST7262, GT911, CH422G, 8 MB OPI PSRAM).
 
-Aktualni verze: **0.22.0-weekly-backlight**
+Aktuální verze: **0.28.0-altitude-calibration**
 
-> Projekt neni urcen pro varianty 7B/7C bez upravy ovladace displeje.
+> Projekt není určen pro varianty 7B/7C bez úpravy ovladače displeje.
 
-## Konzervativni obnova LCD ve v0.20.1
+## Kalibrace tlaku ve verzi 0.28.0
 
-Po praktickem testu byl odstranen periodicky restart RGB DMA z verze 0.20.0,
-protoze na tomto panelu zhorsoval vodorovne posuny obrazu. Firmware znovu
-pouziva overeny bounce buffer 20 radku a puvodni rytmus prekreslovani.
+Webové nastavení nyní umí z aktuálního tlaku BMP180 a referenčního tlaku z WU vypočítat navrženou nadmořskou výšku senzoru. Hodnota se před uložením zobrazí ve formuláři a jemná korekce MSL se nastaví na nulu.
 
-Tlacitko **Srovnat LCD** zustava ve webovem rozhrani, ale obnova se spusti
-jen na vyzadani. Automaticka obnova zustava pouze po operacich, ktere ji
-pouzivala stabilnejsi verze 0.19.0, napriklad po aktualizaci radaru v RAM
-nebo ulozeni nastaveni.
+## Oprava BMP180 ve verzi 0.27.0
 
-## Hlavni funkce
+Původní detekce používala Arduino objekt `Wire`, ale ovladač displeje inicializuje
+sdílenou sběrnici GPIO8/GPIO9 přímo přes ESP-IDF. `Wire` proto nebyl aktivní a
+BMP180 na adrese `0x77` nebyl nalezen.
 
-- animace radarovych snimku CHMI,
-- lokalni ADS-B data z `aircraft.json`,
-- aktualni pocasi z Weather Underground PWS,
-- predpoved Open-Meteo pro +3, +6, +9, +12, +24 a +48 hodin,
-- Slunce, Mesic a astronomicke udaje,
-- dotykovy zoom mapy: cela CR, 50 km, 25 km a 10 km,
-- ulozeni posledniho vyrezu mapy do NVS,
-- runtime radarove aktualizace v PSRAM bez zapisu PNG do LittleFS,
-- prvni nastaveni pres Wi-Fi AP,
-- trvale dostupne webove nastaveni v domaci Wi-Fi,
-- graficke zvyrazneni az tri letounu podle callsignu nebo ICAO hex,
-- nezavisle zapinani radarove a ADS-B vrstvy,
-- mistni hodiny a datum v horni liste s automatickym CET/CEST,
-- webova diagnostika na `/diagnostics` s automatickou obnovou,
-- tydenni plan podsviceni pro pondeli az nedeli,
-- docasne probuzeni zhasnuteho displeje dotykem na 1 minutu.
+Nová verze:
 
-## Prvni spusteni
+- používá již inicializovaný řadič **I2C0**,
+- nevolá `Wire.begin()` a nemění konfiguraci dotyku ani CH422G,
+- ověřuje identifikátor BMP180 `0x55`,
+- načte a zkontroluje tovární kalibrační konstanty,
+- provede zkušební měření tlaku a teploty,
+- při startu zkouší senzor čtyřikrát,
+- při měření krátce uzamkne LVGL, aby současně neprobíhalo čtení GT911.
 
-Po prvnim nahrani firmware zarizeni vytvori konfiguracni pristupovy bod:
+V sériovém monitoru se při správném připojení zobrazí:
+
+```text
+Barometer: BMP180 detected on shared ESP-IDF I2C0 at 0x77, chip ID 0x55
+```
+
+## Novinky ve verzi 0.26.0
+
+### Úvodní obrazovka systému
+
+Po inicializaci LCD se zobrazí samostatná startovací obrazovka:
+
+- animovaný kruhový indikátor,
+- jednořádkový popis právě prováděné operace,
+- procentní průběh inicializace,
+- verze firmware,
+- podpis `Vytvoril OK5TVR`.
+
+Během startu se vypisuje kontrola LCD, stav Wi-Fi nebo konfiguračního AP,
+příprava mapových bufferů, detekce I2C barometru, tvorba radarové cache,
+načítání počasí, Zambretti výpočtu, astronomických údajů a ADS-B. Hlavní
+obrazovka se vytváří skrytě a zobrazí se až po dokončení inicializace.
+Podsvícení zůstává během úvodní obrazovky zapnuté; týdenní plán se aplikuje
+až po přechodu do hlavního rozhraní.
+
+## Novinky ve verzi 0.25.0
+
+- původní jednoduchý textový odhad nahrazen algoritmem **Zambretti**,
+- výstup jednoho z 26 stavů označených kódem `A` až `Z`,
+- výpočet z tlaku přepočteného na hladinu moře, tříhodinového trendu a ročního období,
+- volitelná korekce podle směru větru z aktuálních dat Weather Underground,
+- přepočet tlaku na hladinu moře používá 12hodinový průměr venkovní teploty z WU,
+- tlakový trend se počítá z přímo naměřeného tlaku senzoru, takže změna teploty nevytváří falešný trend,
+- při nedostupné nebo starší než 12hodinové WU teplotě se použije standardních 15 °C,
+- pětibodové slovní hodnocení trendu podle změny tlaku za tři hodiny,
+- Zambretti kód, trend, sezónní korekce a použití větru ve webové diagnostice,
+- pravý panel zobrazuje tlak, změnu za tři hodiny, Zambretti kód a českou předpověď.
+
+## Hlavní funkce
+
+- animace radarových snímků ČHMÚ,
+- lokální ADS-B data z `aircraft.json`,
+- aktuální počasí z Weather Underground PWS,
+- předpověď Open-Meteo pro `+3`, `+6` a `+9 h`,
+- lokální Zambretti předpověď s 24hodinovým grafem tlaku a projekcí trendu,
+- Slunce, Měsíc a astronomické údaje,
+- dotykový zoom mapy: celá ČR, 50 km, 25 km a 10 km,
+- uložení posledního výřezu mapy do NVS,
+- runtime radarové aktualizace v PSRAM bez zápisu PNG do LittleFS,
+- první nastavení přes Wi-Fi AP,
+- trvale dostupné webové nastavení v domácí Wi-Fi,
+- grafické zvýraznění až tří letounů podle callsignu nebo ICAO hex,
+- nezávislé zapínání radarové a ADS-B vrstvy,
+- místní hodiny a datum s automatickým CET/CEST,
+- webová diagnostika na `/diagnostics`,
+- týdenní plán podsvícení od pondělí do neděle,
+- dočasné probuzení zhasnutého displeje dotykem na jednu minutu.
+
+## Připojení barometru
+
+Podporovaný senzor v této hardwarově ověřované větvi:
+
+- **BMP180** na pevné I²C adrese `0x77`.
+
+Zapojení do externího I²C konektoru desky:
+
+```text
+Barometr       Waveshare ESP32-S3-Touch-LCD-7
+------------------------------------------------
+VCC / VIN      3V3
+GND            GND
+SDA            GPIO8
+SCL            GPIO9
+```
+
+Použijte napájení **3,3 V**. Sběrnice je sdílená s dotykovým panelem GT911
+a IO expandérem CH422G. Firmware proto nevytváří novou sběrnici a přistupuje
+k BMP180 přes již spuštěný ESP-IDF řadič I2C0. Adresa BMP180 je pevně `0x77`
+a očekávaný identifikátor čipu je `0x55`.
+
+Označení modulu „MB120“ není typ čipu. Pro tuto verzi byl potvrzen skutečný
+čip **BMP180**, kterému je přizpůsoben ovladač.
+
+## Nastavení barometru ve webu
+
+Na hlavní stránce nastavení je sekce **I2C barometr a Zambretti**:
+
+- **Povolit barometr** – zapne automatickou detekci senzoru,
+- **Nadmořská výška senzoru** – používá se pro přepočet na tlak u hladiny moře,
+- **Korekce tlaku** – jemná kalibrace v hPa.
+
+Pro smysluplné porovnání s meteorologickými údaji zadejte skutečnou nadmořskou
+výšku místa, kde je senzor umístěný. Korekci ponechte nejprve na `0.0 hPa` a
+upravte ji až po porovnání s referenční stanicí.
+
+Nastavení se ukládá do NVS. Změna nadmořské výšky nebo korekce vymaže starou
+historii, protože staré body byly vypočtené jiným převodem.
+
+## Grafické zpracování pravého panelu
+
+Horní část pravého panelu zůstává pro aktuální počasí a astronomii.
+
+Pod ní jsou tři kompaktní karty internetové předpovědi:
+
+```text
++3 h       +6 h       +9 h
+ikona      ikona      ikona
+teplota    teplota    teplota
+srážky     srážky     srážky
+```
+
+Zbylý prostor využívá graf tlaku:
+
+- **modrá plná čára** – skutečný průběh za posledních 24 hodin,
+- **bílý bod a svislá čára** – aktuální okamžik,
+- **žlutá přerušovaná čára** – jednoduchá projekce trendu do `+3`, `+6` a `+9 h`,
+- automaticky přizpůsobený rozsah osy tlaku.
+
+Pod grafem se zobrazuje:
+
+- aktuální tlak přepočtený na hladinu moře,
+- změna odvozená pro tři hodiny,
+- slovní trend,
+- orientační lokální odhad počasí.
+
+## Jak vzniká Zambretti předpověď
+
+Senzor se čte jednou za minutu. Do historie se ukládá jeden bod přibližně po
+pěti minutách, celkem maximálně 289 bodů, tedy přibližně 24 hodin včetně
+aktuálního bodu. Historie zůstává pouze v RAM.
+
+Naměřený tlak se nejprve přepočítá na tlak u hladiny moře. Převod používá:
+
+- tlak ze senzoru,
+- 12hodinový průměr venkovní teploty z Weather Underground,
+- nadmořskou výšku z webového nastavení,
+- volitelnou kalibrační korekci v hPa.
+
+Trend se počítá lineární regresí z bodů za poslední tři hodiny. Změna za tři
+hodiny se současně slovně rozdělí na rychlý pokles, pokles, stabilní stav,
+vzestup nebo rychlý vzestup.
+
+Samotný algoritmus Zambretti používá:
+
+- tlak přepočtený na hladinu moře,
+- trend v hPa za hodinu,
+- měsíc a severní polokouli,
+- volitelný směr větru.
+
+Pokud je dostupné aktuální měření Weather Underground, převezme se z něj směr
+větru a použije se šestnáctibodová větrná korekce. Bez WU dat algoritmus pracuje
+bez větrné korekce. Sezónní korekce se použije pouze po synchronizaci NTP, kdy
+je známý místní měsíc.
+
+Výsledkem je kód `A` až `Z` a krátký český text, například:
+
+```text
+Z:C  Vyjasnovani
+Z:N  Prehanky, jasne intervaly
+Z:Z  Bourlivo, vydatny dest
+```
+
+Zambretti je kategoriální lokální předpověď přibližně pro několik dalších
+hodin, nikoliv samostatná numerická předpověď pro přesné časy `+3`, `+6` a
+`+9 h`. Tyto tři karty nad grafem nadále pocházejí z Open-Meteo nebo WU.
+Žlutá přerušovaná čára v grafu je pouze lineární projekce tlakového trendu.
+
+Po startu musí být nejprve získána téměř celá tříhodinová historie (přibližně
+175 minut při pětiminutových bodech). Do té doby se zobrazuje `Z:-` a informace
+o sběru trendu. Po restartu nebo odpojení napájení začíná historie znovu.
+
+Implementace vychází z principů popsaných v článku Zbotic a z klasické
+referenční implementace pywws. Článek Zbotic používáme pro pět slovních pásem
+změny tlaku; vlastní kód `A` až `Z`, prahovou hodnotu trendu, sezónní korekci,
+větrnou korekci a vyhledávací tabulky přebíráme z klasického Zambretti postupu:
+
+- https://zbotic.in/barometric-pressure-trend-weather-prediction-algorithm/
+- https://pywws.readthedocs.io/en/legacy/_modules/pywws/ZambrettiCore.html
+
+Tlaková předpověď je orientační. Nezahrnuje synoptické mapy, vlhkost ve výšce,
+frontální rozhraní ani vývoj srážkových pásem a nenahrazuje oficiální
+meteorologickou předpověď.
+
+## První spuštění
+
+Po prvním nahrání firmware zařízení vytvoří konfigurační přístupový bod:
 
 ```text
 SSID: Radar-ADSB-Setup-XXXX
@@ -47,212 +220,180 @@ Heslo: radarsetup
 Adresa: http://192.168.4.1/
 ```
 
-Postup:
+1. Připojte telefon nebo počítač k síti `Radar-ADSB-Setup-XXXX`.
+2. Otevřete `http://192.168.4.1/`.
+3. Vyplňte domácí Wi-Fi, ADS-B URL, případně WU a barometr.
+4. Stiskněte **Uložit nastavení**.
+5. Zařízení se připojí k domácí síti.
 
-1. Pripojte telefon nebo pocitac k siti `Radar-ADSB-Setup-XXXX`.
-2. Otevrete `http://192.168.4.1/`.
-3. Vyplnte domaci Wi-Fi, ADS-B URL a volitelne WU udaje.
-4. Stisknete **Ulozit nastaveni**.
-5. Zarizeni se restartuje a pripoji k domaci siti.
+Při chybě hesla nebo nedostupné síti se konfigurační AP spustí znovu.
 
-Pri chybe hesla nebo nedostupne siti se konfiguracni AP spusti znovu.
+## Webové nastavení v domácí síti
 
-## Webove nastaveni v domaci siti
-
-Webovy server zustava aktivni i po pripojeni k domaci Wi-Fi. IP adresa se
-zobrazuje v horni liste displeje a v seriovem logu.
-
-Priklad:
+Webový server zůstává aktivní i po připojení k domácí Wi-Fi:
 
 ```text
 http://192.168.1.123/
 ```
 
-Pri funkcni podpore mDNS lze pouzit:
+Při funkčním mDNS:
 
 ```text
 http://radar-adsb.local/
 ```
 
-Zmenu vrstev a sledovanych letounu lze ulozit bez restartu. Restart se provede
-jen pri zmene SSID nebo zadani noveho hesla Wi-Fi.
-
-> Web nema prihlaseni. Pouzivejte jej pouze v duveryhodne lokalni siti a
-> nevystavujte port 80 do internetu.
-
-## Vrstvy mapy
-
-Ve webovem rozhrani jsou dva nezavisle prepinace:
-
-- **Radarova vrstva**,
-- **Letouny ADS-B**.
-
-Dostupne kombinace:
-
-```text
-radar + ADS-B
-jen radar
-jen ADS-B
-obe vrstvy vypnute
-```
-
-Volba se uklada do NVS a po restartu se obnovi. Datove zdroje se mohou dale
-aktualizovat na pozadi, i kdyz je prislusna vrstva skryta; po opetovnem zapnuti
-je proto vrstva ihned dostupna.
-
-## Tydenni plan podsviceni
-
-Na hlavni webove strance je tabulka pro pondeli az nedeli. Pro kazdy den lze
-nastavit:
-
-- zda je den aktivni,
-- cas zapnuti podsviceni,
-- cas vypnuti podsviceni.
-
-Vychozi plan je kazdy den `06:00-23:00`. Interval muze prechazet pres pulnoc,
-napriklad `18:00-02:00`. Stejny cas Od a Do znamena podsviceni zapnute po cely
-den. Vypnuty den nema bezny aktivni interval.
-
-Mimo nastaveny interval se vypne pouze podsviceni. ESP32, radar, ADS-B, pocasi
-i webovy server dale pracuji. Dotyk zhasnuteho displeje podsviceni zapne na
-60 sekund. Prvni dotyk zachyti neviditelna prekryvna vrstva, takze soucasne
-nezmeni zoom mapy ani nestiskne skryte tlacitko. Po minute se podsviceni znovu
-vypne, pokud mezitim nezacal aktivni interval.
-
-Plan pouziva mistni cas `Europe/Prague` pres pravidlo
-`CET-1CEST,M3.5.0/2,M10.5.0/3`. Dokud neni NTP synchronizovano, podsviceni
-zustava zapnute.
-
-## Zvyrazneni tri letounu
-
-Lze ulozit tri nezavisle identifikatory. Kazdy muze byt:
-
-- callsign, napriklad `CSA123`,
-- ICAO hex, napriklad `4B1812`.
-
-Na webu je seznam aktualne zachycenych letounu a tlacitka pro vlozeni vybraneho
-letounu do slotu 1, 2 nebo 3.
-
-Zvyrazneni je pouze graficke:
-
-- letoun 1: zvetseny symbol s ruzovym kruhem,
-- letoun 2: zvetseny symbol s azurovym kruhem,
-- letoun 3: zvetseny symbol se zlutym kruhem,
-- bez zvuku a bez vyskakovaciho okna.
-
-Pri vypnute ADS-B vrstve se letouny vcetne zvyraznenych symbolu nekresli.
-
-## Ulozeni konfigurace
-
-Do NVS se uklada:
-
-- SSID a heslo Wi-Fi,
-- URL `aircraft.json`,
-- WU stanice a API klic,
-- stav radarove a ADS-B vrstvy,
-- zapnuti zvyrazneni,
-- tri callsigny nebo ICAO identifikatory,
-- zapnuti tydenniho planu podsviceni,
-- aktivni dny a casy Od/Do pro pondeli az nedeli,
-- posledni vyrez mapy.
-
-Firmware automaticky prevede puvodni jeden sledovany letoun z verze 0.18.0 do
-prvniho slotu.
-
-## ADS-B zdroj
-
-Vychozi priklad URL:
-
-```text
-http://192.168.1.170:8080/data/aircraft.json
-```
-
-ESP32 a ADS-B prijimac musi byt ve stejne siti nebo mezi jejich VLAN musi byt
-povolena komunikace.
-
-## Pocasi
-
-- Weather Underground PWS poskytuje aktualni hodnoty vlastni stanice.
-- Open-Meteo poskytuje predpoved a nevyzaduje API klic.
-- Bez WU klice zustane aktualni PWS cast prazdna, predpoved Open-Meteo funguje.
-
-## Stabilita RGB displeje
-
-Prvni radarove soubory se stahuji pred inicializaci LCD. Po spusteni displeje
-se nove radarove PNG stahuje do PSRAM a dekoduje primo do kompaktni radarove
-vrstvy. Behem bezneho obnoveni se PNG nezapisuje do LittleFS.
-
-Po ulozeni webove konfigurace nebo po radarove aktualizaci je naplanovana
-jednorazova obnova RGB DMA pri nasledujicim VSYNC. PCLK se za behu nemeni.
-
-## Kompilace
-
-1. Otevrete celou slozku v PlatformIO.
-2. Provedte **PlatformIO: Clean**.
-3. Spustte **PlatformIO: Build**.
-4. Spustte **PlatformIO: Upload**.
-5. Serial Monitor nastavte na `115200 baud`.
-
-Soubor `include/secrets.h` neni pro Wi-Fi potreba. Konfigurace se provadi pres
-web. `include/secrets.example.h` lze pouzit jen pro volitelne compile-time
-vychozi hodnoty WU a ADS-B.
-
-## Diagnostika
-
-Webova diagnosticka stranka je dostupna na:
+Na první stránce je přímý odkaz na diagnostiku:
 
 ```text
 http://IP_ZARIZENI/diagnostics
 ```
 
-Zobrazuje stav site, pameti, PSRAM, casu/NTP, radaru, ADS-B, pocasi, astronomickych dat, prekreslovani mapy, poctu obnov RGB DMA a stav podsviceni vcetne aktivniho planu a zbyvajici doby docasneho probuzeni. Data se automaticky obnovuji po 5 sekundach. JSON je dostupny na `/api/diagnostics`.
+Web nemá přihlášení. Používejte jej pouze v důvěryhodné lokální síti a
+nevystavujte port 80 do internetu.
 
-Horni lista displeje zobrazuje mistni cas a datum. Firmware pouziva POSIX zonu `CET-1CEST,M3.5.0/2,M10.5.0/3`, takze prechod mezi zimnim a letnim casem je automaticky.
+## Vrstvy mapy a zvýraznění letounů
 
-Heartbeat obsahuje stav vrstev a tri alerty:
+Ve webu lze nezávisle zapnout:
+
+- radarovou vrstvu,
+- letouny ADS-B.
+
+Dostupné kombinace jsou radar + ADS-B, jen radar, jen ADS-B nebo obě vrstvy
+vypnuté.
+
+Lze uložit tři callsigny nebo ICAO hex identifikátory. Každý sledovaný letoun
+má na mapě vlastní barvu zvýrazňovacího kruhu. Upozornění je pouze grafické.
+
+## Týdenní plán podsvícení
+
+Pro každý den lze nastavit samostatný čas zapnutí a vypnutí. Interval může
+přecházet přes půlnoc, například `18:00-02:00`.
+
+Mimo aktivní interval se vypne pouze podsvícení. ESP32, síť a sběr dat dále
+pracují. První dotyk zapne podsvícení na 60 sekund a je zachycen překryvnou
+vrstvou, takže současně nezmění zoom mapy.
+
+Plán používá místní čas s pravidlem:
 
 ```text
-HEARTBEAT ms=120000 WiFi=1 AP=0 heap=138 kB forecast=Open-Meteo cards=6 layers=R1/A1 alerts=on [CSA123|4B1812|RYR45] BL=1 schedule=1 wake=0
+CET-1CEST,M3.5.0/2,M10.5.0/3
 ```
 
-Dulezite zpravy:
+Dokud není NTP synchronizované, podsvícení zůstává zapnuté.
+
+## Teplota pro redukci tlaku
+
+Barometr je obvykle umístěný v místnosti a jeho vlastní teplota může být
+ovlivněná elektronikou displeje. Pro meteorologický přepočet tlaku proto
+firmware používá venkovní teplotu z Weather Underground.
+
+- jednotlivá WU měření se ukládají pouze v RAM,
+- stejné měření se podle pole `epoch` nezapočítá opakovaně,
+- používá se klouzavý průměr za posledních nejvýše 12 hodin,
+- při změně ID WU stanice se teplotní historie vymaže,
+- při prvním přechodu z náhradních 15 °C na WU se znovu založí tlakový graf, aby nemíchal dva různé přepočty,
+- chybí-li WU data nebo jsou starší než 12 hodin, použije se 15 °C,
+- teplota BMP/BME senzoru se zobrazuje jen jako diagnostický údaj.
+
+Tříhodinový trend se počítá z tlaku přímo naměřeného senzorem před redukcí.
+Změna venkovní teploty proto nevytvoří falešný vzestup nebo pokles. Graf a
+Zambretti používají tlak přepočtený na hladinu moře.
+
+## Diagnostika
+
+Stránka `/diagnostics` zobrazuje mimo jiné:
+
+- stav Wi-Fi, AP, IP a RSSI,
+- heap a PSRAM,
+- čas, datum, NTP a CET/CEST,
+- radar, ADS-B, počasí a astronomii,
+- stav barometru a I²C adresu,
+- aktuální tlak a teplotu senzoru,
+- počet bodů tlakové historie,
+- trend v hPa/h a změnu za tři hodiny,
+- Zambretti kód a českou předpověď,
+- informaci o korekci směrem větru a ročním obdobím,
+- počet překreslení mapy a obnov RGB DMA,
+- plán a stav podsvícení.
+
+JSON je dostupný na:
 
 ```text
-Config web server: started on port 80 for AP and STA
-Config web on home network: http://192.168.1.123/
-Runtime web settings applied without restart
+http://IP_ZARIZENI/api/diagnostics
 ```
 
-## API stavu
+Heartbeat nově vypadá například takto:
 
 ```text
-http://IP_ZARIZENI/api/status
+HEARTBEAT ms=120000 WiFi=1 AP=0 heap=137 kB forecast=Open-Meteo cards=3 layers=R1/A1 alerts=on [CSA123|4B1812|RYR45] BL=1 schedule=1 wake=0 baro=BMP180 1015.8 hPa d3h=-1.2 Z=R
 ```
 
-Vraci JSON s verzi firmware, Wi-Fi/AP, stavem obou vrstev a tremi sledovanymi
-letouny vcetne informace, zda jsou prave zachyceni.
+## Stabilita RGB displeje
 
-## Smazani konfigurace
+Firmware používá konzervativní 20řádkový bounce buffer. Periodický restart RGB
+DMA je vypnutý, protože na testovaném panelu zhoršoval vodorovné posuny.
+Tlačítko **Srovnat LCD** ve webu zůstává dostupné pro ruční obnovu.
 
-Tlacitko **Smazat nastaveni** vymaze sitovou konfiguraci, datove zdroje,
-vrstvy, sledovane letouny i ulozeny vyrez mapy. Po restartu se spusti prvotni
-AP.
+Radarové PNG se po startu aktualizují přímo v PSRAM bez runtime zápisu do
+LittleFS. Tlaková historie je také pouze v RAM.
+
+## Kompilace
+
+1. Otevřete celou složku projektu v PlatformIO.
+2. Proveďte **PlatformIO: Clean**.
+3. Spusťte **PlatformIO: Build**.
+4. Spusťte **PlatformIO: Upload**.
+5. Serial Monitor nastavte na `115200 baud`.
+
+Při přechodu ze starší verze je vhodné jednou odstranit `.pio`, aby PlatformIO
+odstranilo dříve stažené, nyní již nepoužívané Adafruit knihovny barometru:
+
+```powershell
+Remove-Item -Recurse -Force .pio
+pio run
+```
+
+Ovladač BMP180 je nyní součástí projektu v souborech
+`src/bmp180_shared_i2c.*` a nepřidává další knihovní závislost.
+
+## Uložení konfigurace
+
+Do NVS se ukládá:
+
+- Wi-Fi a datové zdroje,
+- vrstvy mapy,
+- tři sledované letouny,
+- týdenní plán podsvícení,
+- zapnutí barometru,
+- nadmořská výška senzoru,
+- korekce tlaku,
+- poslední výřez mapy.
+
+Tlaková historie se do NVS ani do LittleFS neukládá.
 
 ## Struktura projektu
 
 ```text
-include/config.h             rozmery, intervaly a AP parametry
-include/models.h             datove modely a tri alerty
-include/settings_defaults.h  volitelne compile-time vychozi hodnoty
-src/device_config.*          NVS, AP, STA web a konfigurace vrstev
-src/adsb_service.*           nacteni aircraft.json
-src/weather_service.*        WU a Open-Meteo
-src/radar_service.*          CHMI radar a runtime aktualizace v PSRAM
-src/map_renderer.*           mapa, vrstvy a zvyraznene symboly
-src/ui.*                     LVGL obrazovka a dotyk
-src/main.cpp                 inicializace a planovani uloh
+include/config.h             rozměry, intervaly, I²C piny a AP parametry
+include/models.h             datové modely, tlaková historie a diagnostika
+src/bmp180_shared_i2c.*      BMP180 na sdílené ESP-IDF sběrnici I2C0
+src/barometer_service.*      měření, historie, redukce tlaku a trend
+src/zambretti_forecaster.*   čistý výpočet Zambretti A-Z
+src/device_config.*          NVS, AP/STA web, barometr a diagnostika
+src/weather_service.*        WU a Open-Meteo +3/+6/+9 h
+src/adsb_service.*           načtení aircraft.json
+src/radar_service.*          ČHMÚ radar a runtime aktualizace v PSRAM
+src/map_renderer.*           mapa, vrstvy a zvýrazněné symboly
+src/ui.*                     LVGL obrazovka, tlakový graf a dotyk
+src/main.cpp                 inicializace a plánování úloh
+docs/ZAMBRETTI.md            vzorce, prahy, zdroje a omezení algoritmu
 ```
 
-## PlatformIO build cache
+## Kalibrace nadmořské výšky barometru
 
-Version 0.20.2 can restore the RGB bounce buffer from a value left by an older firmware release (for example 30 scanlines from v0.20.0) back to 20 scanlines. The pre-build patch no longer aborts compilation if the installed display library changes its file layout.
+Webové nastavení obsahuje pomocnou kalibraci podle aktuálního tlaku u hladiny moře. Firmware načte přímo měřený tlak BMP180, teplotu používanou pro redukci a volitelně také aktuální tlak z Weather Underground. Z těchto hodnot dopočítá navrženou nadmořskou výšku senzoru.
+
+Příklad: místní tlak `974 hPa` a referenční tlak `1014 hPa` odpovídají přibližně `341 m` při 15 °C nebo `353 m` při 25 °C. Přesný výsledek se proto počítá z aktuálního klouzavého průměru venkovní teploty WU.
+
+Po výpočtu se hodnota pouze vloží do formuláře. Uživatel ji musí potvrdit tlačítkem **Uložit nastavení**. Jemná korekce MSL se při automatickém výpočtu nastaví na `0,0 hPa`; používat se má jen k doladění o malé zbytkové odchylky. Tříhodinový trend se stále počítá z neupraveného tlaku senzoru.
+
