@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Focused static audit for v0.28.0 altitude calibration support."""
+"""Focused static audit for v0.28.4 Blitzortung proximity alert + OTA."""
 from pathlib import Path
 import re
 import sys
@@ -32,15 +32,29 @@ zambretti_h = read("src/zambretti_forecaster.h")
 zambretti_cpp = read("src/zambretti_forecaster.cpp")
 radar_h = read("src/radar_service.h")
 radar_cpp = read("src/radar_service.cpp")
+map_h = read("src/map_renderer.h")
 map_cpp = read("src/map_renderer.cpp")
+lightning_h = read("src/lightning_service.h")
+lightning_cpp = read("src/lightning_service.cpp")
 weather_cpp = read("src/weather_service.cpp")
 ui_h = read("src/ui.h")
 ui_cpp = read("src/ui.cpp")
 patch = read("scripts/patch_display_driver.py")
 readme = read("README.md")
 
-require("0.28.0-altitude-calibration" in version,
-        "firmware version is not v0.28.0")
+require("0.28.4-lightning-proximity-alert-ota" in version,
+        "firmware version is not v0.28.4-lightning-proximity-alert-ota")
+require("LIGHTNING_ALERT_RADIUS_KM = 10.0f" in config and
+        "LIGHTNING_ALERT_MAX_AGE_SEC = 10UL * 60UL" in config,
+        "10 km / 10 min lightning proximity alert constants are missing")
+require("recentStrikeWithin" in lightning_h and
+        "greatCircleDistanceKm" in lightning_cpp and
+        "recentStrikeWithin(Config::FALLBACK_LAT, Config::FALLBACK_LON" in main,
+        "realtime lightning proximity detection is missing")
+require("drawGeographicCircle" in map_cpp and
+        "LIGHTNING_ALERT_RADIUS_KM" in map_cpp and
+        "lightningProximityAlert" in map_h,
+        "geographic red 10 km lightning warning circle is missing")
 require("qio_opi" in pio and "board_build.psram_type = opi" in pio,
         "8 MB OPI PSRAM configuration is missing")
 require("BOUNCE_LINES = 20" in patch and "strict=False" in patch,
@@ -218,13 +232,83 @@ require("setBacklightWakeOverlay" in ui_cpp and "LV_EVENT_RELEASED" in ui_cpp,
 require("WebServer" in device_h and "DNSServer" in device_h and
         "WiFi.softAP" in device_cpp and "dnsServer_.start" in device_cpp,
         "first-run AP and persistent web server are incomplete")
+require("otadata" in read("partitions.csv") and
+        "ota_0" in read("partitions.csv") and "ota_1" in read("partitions.csv"),
+        "dual OTA partitions are missing")
+require("#include <Update.h>" in device_cpp and
+        'server_.on("/update"' in device_cpp and
+        "UPLOAD_FILE_START" in device_cpp and
+        "Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH)" in device_cpp and
+        "Update.write" in device_cpp and "Update.end(true)" in device_cpp and
+        "OTA aktualizace firmware" in device_cpp,
+        "browser OTA update path is incomplete")
+require("otaInProgress" in device_h and "deviceConfig.otaInProgress()" in main,
+        "main loop is not protected during OTA flash writes")
 require("AIRCRAFT_ALERT_SLOT_COUNT = 3" in models and
         "kAlertColors[AIRCRAFT_ALERT_SLOT_COUNT]" in map_cpp,
         "three aircraft highlights are missing")
-require("radarLayerEnabled" in device_h and "adsbLayerEnabled" in device_h,
-        "radar/ADS-B layer settings are missing")
+require("radarLayerEnabled" in device_h and
+        "lightningLayerEnabled" in device_h and
+        "adsbLayerEnabled" in device_h,
+        "radar/lightning/ADS-B layer settings are missing")
 require("consumeMapTap" in main and "nextZoomMode" in main,
         "touch map zoom is missing")
+
+
+# Blitzortung realtime lightning overlay.
+require("links2004/WebSockets@2.7.2" in pio,
+        "arduinoWebSockets dependency is missing")
+require("class LightningService" in lightning_h and
+        "WebSocketsClient" in lightning_h and
+        "ws7.blitzortung.org" in lightning_cpp and
+        "kSubscription" in lightning_cpp and
+        "decodeHeaderLzw" in lightning_cpp and
+        "timeNs / 1000000000ULL" in lightning_cpp,
+        "Blitzortung WebSocket/LZW receive path is incomplete")
+require("kMaxStrikes = 4096" in lightning_h and
+        "MALLOC_CAP_SPIRAM" in lightning_cpp and
+        "addStrike" in lightning_cpp and
+        "pruneOldStrikes" in lightning_cpp,
+        "Blitzortung PSRAM strike buffer is incomplete")
+require('preferences.putBool("layer_lightning"' in device_cpp and
+        'preferences.getBool("layer_lightning", true)' in device_cpp and
+        "name='layer_lightning'" in device_cpp,
+        "lightning layer is not persisted/configurable in the web UI")
+require("lightning_status" in device_cpp and
+        "lightning_ready" in device_cpp and
+        "lightning_age_ms" in device_cpp and
+        "lightning_layer" in device_cpp,
+        "lightning web diagnostics are incomplete")
+require("lastLightningUpdateMs" in models and
+        "lightningReady" in models and
+        "lightningFrameCount" in models and
+        "lightningStatus" in models,
+        "lightning runtime diagnostics model is incomplete")
+require("frameTimeUtc" in radar_h and "frameTimeUtc" in radar_cpp,
+        "radar frame timestamps are not exposed for lightning sync")
+require("updateForRadar" in lightning_h and
+        "Config::RADAR_STEP_SECONDS" in lightning_cpp and
+        "renderFrame" in lightning_h and
+        "renderFrame" in lightning_cpp and
+        "strike.epochSec <= start" in lightning_cpp and
+        "strike.epochSec > end" in lightning_cpp,
+        "synchronized Blitzortung five-minute animation path is incomplete")
+require("lightning.begin()" in main and
+        "lightning.updateForRadar(radar)" in main and
+        "lightning.loop(" in main and
+        "lightning.renderFrame" in main and
+        "(radarLayerEnabled || lightningLayerEnabled)" in main,
+        "lightning animation is not coupled to the radar timeline")
+require("lightningLayerEnabled" in map_h and
+        "lightningLayerEnabled" in map_cpp and
+        "BLESKY" in map_cpp,
+        "map footer/signature does not expose the lightning layer")
+lightning_render = main.find("lightning.render")
+reference_draw = main.find("MapRenderer::drawReference", lightning_render)
+require(lightning_render >= 0 and reference_draw > lightning_render,
+        "lightning must render below borders/cities/reference labels")
+require("M_PI" not in lightning_cpp,
+        "lightning service should not depend on non-portable M_PI")
 
 # Radar/LCD protections retained from prior stable release.
 require("setDisplayActive(true)" in main,
@@ -338,6 +422,8 @@ print("Pressure: WU 12 h outdoor-temperature reduction with 15 C fallback")
 print("History: 1 min samples, 5 min RAM points, 24 h sea-level chart")
 print("Trend: 3 h regression from unreduced station pressure")
 print("Zambretti: A-Z codes, season and optional WU wind correction")
-print("Diagnostics: barometer and Zambretti details exposed on web")
+print("Diagnostics: barometer, Zambretti and lightning status exposed on web")
 print("Display: conservative 20-line buffer, no periodic DMA watchdog")
 print("Radar: runtime PNG update remains RAM-only")
+print("Lightning: Blitzortung realtime WSS, LZW decode, six synchronized radar slots")
+print("OTA: browser firmware upload to dual OTA app partitions")

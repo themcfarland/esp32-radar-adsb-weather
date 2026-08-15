@@ -13,6 +13,7 @@
 #include "debug_log.h"
 #include "device_config.h"
 #include "map_renderer.h"
+#include "lightning_service.h"
 #include "radar_service.h"
 #include "ui.h"
 #include "weather_service.h"
@@ -23,10 +24,13 @@ AstronomyService astronomy;
 BarometerService barometer;
 WeatherService weather("", "");
 RadarService radar;
+LightningService lightning;
 DeviceConfigService deviceConfig;
 AircraftAlertConfig aircraftAlert;
 bool radarLayerEnabled = true;
+bool lightningLayerEnabled = true;
 bool adsbLayerEnabled = true;
+bool lightningProximityAlertActive = false;
 Preferences mapPreferences;
 MapViewport mapViewport;
 RuntimeDiagnostics runtimeDiagnostics;
@@ -34,6 +38,7 @@ RuntimeDiagnostics runtimeDiagnostics;
 uint8_t radarFrame = 0;
 uint32_t lastAdsbUpdate = 0;
 uint32_t lastRadarUpdate = 0;
+uint32_t lastLightningUpdate = 0;
 uint32_t lastRadarAnimation = 0;
 uint32_t lastCurrentWeatherUpdate = 0;
 uint32_t lastForecastUpdate = 0;
@@ -114,6 +119,7 @@ void applyDeviceSettings() {
   }
   aircraftAlert = deviceConfig.alertConfig();
   radarLayerEnabled = settings.radarLayerEnabled;
+  lightningLayerEnabled = settings.lightningLayerEnabled;
   adsbLayerEnabled = settings.adsbLayerEnabled;
   if (barometerInitialized) {
     lvgl_port_lock(-1);
@@ -123,9 +129,10 @@ void applyDeviceSettings() {
     lvgl_port_unlock();
   }
   DebugLog::printf(
-      "Runtime config: ADSB=%s WU=%s layers=radar:%d adsb:%d alerts=%s [%s|%s|%s] backlightSchedule=%s barometer=%s\n",
+      "Runtime config: ADSB=%s WU=%s layers=radar:%d lightning:%d adsb:%d alerts=%s [%s|%s|%s] backlightSchedule=%s barometer=%s\n",
       settings.adsbUrl.c_str(), settings.wuStationId.c_str(),
-      radarLayerEnabled ? 1 : 0, adsbLayerEnabled ? 1 : 0,
+      radarLayerEnabled ? 1 : 0, lightningLayerEnabled ? 1 : 0,
+      adsbLayerEnabled ? 1 : 0,
       aircraftAlert.enabled ? "on" : "off", aircraftAlert.targets[0],
       aircraftAlert.targets[1], aircraftAlert.targets[2],
       settings.backlightScheduleEnabled ? "on" : "off",
@@ -363,6 +370,7 @@ void updateRuntimeDiagnostics() {
   runtimeDiagnostics.uptimeMs = now;
   runtimeDiagnostics.lastAdsbUpdateMs = lastAdsbUpdate;
   runtimeDiagnostics.lastRadarUpdateMs = lastRadarUpdate;
+  runtimeDiagnostics.lastLightningUpdateMs = lightning.lastSuccessMs();
   runtimeDiagnostics.lastCurrentWeatherUpdateMs = lastCurrentWeatherUpdate;
   runtimeDiagnostics.lastForecastUpdateMs = lastForecastUpdate;
   runtimeDiagnostics.lastAstronomyUpdateMs = lastAstronomyUpdate;
@@ -376,6 +384,8 @@ void updateRuntimeDiagnostics() {
   runtimeDiagnostics.forecastSlotCount = weatherData.forecastSlotCount;
   runtimeDiagnostics.aircraftCount = aircraft.count;
   runtimeDiagnostics.radarCacheReady = radar.animationCacheReady();
+  runtimeDiagnostics.lightningReady = lightning.ready();
+  runtimeDiagnostics.lightningFrameCount = lightning.frameCount();
   runtimeDiagnostics.currentWeatherValid = weatherData.current.valid;
   runtimeDiagnostics.weatherPressureHpa =
       weatherData.current.valid ? weatherData.current.pressureHpa : NAN;
@@ -436,6 +446,8 @@ void updateRuntimeDiagnostics() {
           : 0;
   strlcpy(runtimeDiagnostics.radarStatus, radar.status(),
           sizeof(runtimeDiagnostics.radarStatus));
+  strlcpy(runtimeDiagnostics.lightningStatus, lightning.status(),
+          sizeof(runtimeDiagnostics.lightningStatus));
   strlcpy(runtimeDiagnostics.adsbStatus, aircraft.status,
           sizeof(runtimeDiagnostics.adsbStatus));
   strlcpy(runtimeDiagnostics.weatherStatus, weatherData.status,
@@ -540,11 +552,28 @@ void redrawMap() {
                                       Config::MAP_H, mapViewport);
   }
 
+  // Blitzortung strikes are grouped into the same five-minute interval ending
+  // at the matching CHMI radar timestamp, so both layers animate together.
+  if (lightningLayerEnabled && lightning.frameReady(radarFrame)) {
+    lightning.renderFrame(radarFrame, buffer, Config::MAP_W, Config::MAP_H,
+                          mapViewport);
+  }
+
+  // The proximity warning is realtime and intentionally independent of the
+  // animated radar frame. It stays red while a strike from the last 10 min is
+  // inside the real 10 km radius around the home/station position.
+  lightningProximityAlertActive =
+      lightningLayerEnabled &&
+      lightning.recentStrikeWithin(Config::FALLBACK_LAT, Config::FALLBACK_LON,
+                                   Config::LIGHTNING_ALERT_RADIUS_KM,
+                                   Config::LIGHTNING_ALERT_MAX_AGE_SEC);
+
   // LVGL object/text operations and the front/back canvas swap stay protected.
   lvgl_port_lock(-1);
   MapRenderer::drawReference(canvas, buffer, Config::MAP_W,
                              Config::MAP_H, mapViewport,
-                             radarLayerEnabled, adsbLayerEnabled);
+                             radarLayerEnabled, lightningLayerEnabled,
+                             adsbLayerEnabled, lightningProximityAlertActive);
   if (adsbLayerEnabled) {
     MapRenderer::drawAircraft(canvas, buffer, Config::MAP_W, Config::MAP_H,
                               adsb.snapshot(), mapViewport, aircraftAlert);
@@ -622,12 +651,18 @@ void setup() {
   // panel starts reading PSRAM. This avoids the heaviest flash/PSRAM traffic
   // during LCD operation. Later five-minute updates use one PNG in PSRAM only.
   radar.begin();
+  lightning.begin();
   deviceConfig.begin(&adsb.snapshot(), &runtimeDiagnostics);
   if (deviceConfig.stationConnected()) {
     Serial.println("Preloading CHMI radar files before LCD initialization...");
     radar.updateFrames();
+    if (lightningLayerEnabled) {
+      Serial.println("Synchronizing Blitzortung slots to CHMI radar times...");
+      lightning.updateForRadar(radar);
+    }
   }
   lastRadarUpdate = millis();
+  lastLightningUpdate = lightning.lastSuccessMs();
   lastRadarAnimation = millis();
 
   lcd_init();
@@ -720,12 +755,45 @@ void loop() {
   updateRuntimeDiagnostics();
   deviceConfig.loop();
 
+  // While the web OTA handler is writing the inactive app partition, avoid
+  // radar downloads, redraws and other flash/network work. WebServer still
+  // receives the next upload chunk because deviceConfig.loop() runs first.
+  if (deviceConfig.otaInProgress()) {
+    delay(1);
+    return;
+  }
+
+  // Keep the realtime Blitzortung WSS client serviced continuously. A new
+  // strike requests a redraw even while the radar animation is paused.
+  if (lightning.loop(lightningLayerEnabled && deviceConfig.stationConnected())) {
+    mapDirty = true;
+  }
+
+  // Redraw also when the 10 km proximity warning expires. Without this edge
+  // check a paused radar could otherwise leave the red circle visible after
+  // the ten-minute warning window elapsed.
+  const bool proximityAlertNow =
+      lightningLayerEnabled &&
+      lightning.recentStrikeWithin(Config::FALLBACK_LAT, Config::FALLBACK_LON,
+                                   Config::LIGHTNING_ALERT_RADIUS_KM,
+                                   Config::LIGHTNING_ALERT_MAX_AGE_SEC);
+  if (proximityAlertNow != lightningProximityAlertActive) {
+    lightningProximityAlertActive = proximityAlertNow;
+    mapDirty = true;
+    DebugLog::printf("Lightning proximity alert: %s (%.0f km / %u min)\n",
+                     proximityAlertNow ? "ACTIVE" : "clear",
+                     Config::LIGHTNING_ALERT_RADIUS_KM,
+                     static_cast<unsigned>(
+                         Config::LIGHTNING_ALERT_MAX_AGE_SEC / 60U));
+  }
+
   if (deviceConfig.consumeLcdResyncRequested()) {
     requestDisplaySyncRecovery("manual web request");
   }
 
   if (deviceConfig.consumeRuntimeSettingsChanged()) {
     const bool previousRadarLayer = radarLayerEnabled;
+    const bool previousLightningLayer = lightningLayerEnabled;
     const bool previousAdsbLayer = adsbLayerEnabled;
     const AircraftAlertConfig previousAlert = aircraftAlert;
     applyDeviceSettings();
@@ -739,8 +807,13 @@ void loop() {
           strcasecmp(previousAlert.targets[slot], aircraftAlert.targets[slot]) != 0;
     }
     if (previousRadarLayer != radarLayerEnabled ||
+        previousLightningLayer != lightningLayerEnabled ||
         previousAdsbLayer != adsbLayerEnabled || alertDisplayChanged) {
       mapDirty = true;
+    }
+    if (lightningLayerEnabled && !lightning.ready() &&
+        deviceConfig.stationConnected()) {
+      if (lightning.updateForRadar(radar)) mapDirty = true;
     }
 
     // Saving web settings writes NVS while the RGB panel is active. Schedule
@@ -761,6 +834,14 @@ void loop() {
   if (networkConnected && !lastNetworkConnected) {
     DebugLog::println("WiFi restored: refreshing network data");
     performInitialUpdates();
+    const bool radarChanged = radar.updateFrames();
+    if (radarChanged && !radar.animationCacheReady()) prepareRadarAnimation();
+    lastRadarUpdate = now;
+    if (lightningLayerEnabled) {
+      lightning.updateForRadar(radar);
+    }
+    radarFrame = 0;
+    lastRadarAnimation = now;
     mapDirty = true;
   }
   lastNetworkConnected = networkConnected;
@@ -786,9 +867,13 @@ void loop() {
       if (!radar.animationCacheReady()) prepareRadarAnimation();
       displayResyncPending = true;
     }
+    if (lightningLayerEnabled) {
+      lightning.updateForRadar(radar);
+    }
     radarFrame = 0;
     lastCurrentWeatherUpdate = lastForecastUpdate = millis();
     lastAdsbUpdate = lastRadarUpdate = millis();
+    lastLightningUpdate = lightning.lastSuccessMs();
     lastRadarAnimation = millis();
     mapDirty = true;
   }
@@ -803,12 +888,19 @@ void loop() {
   if (deviceConfig.stationConnected() &&
       due(now, lastRadarUpdate, Config::RADAR_REFRESH_MS)) {
     lastRadarUpdate = now;
-    if (radar.updateFrames()) {
+    const bool radarChanged = radar.updateFrames();
+    if (radarChanged) {
       if (!radar.animationCacheReady()) prepareRadarAnimation();
       radarFrame = 0;
       lastRadarAnimation = now;
       mapDirty = true;
       displayResyncPending = true;
+    }
+
+    // Only the five-minute slot boundaries are coupled to the radar refresh;
+    // strike reception itself is continuous over Blitzortung WebSocket.
+    if (lightningLayerEnabled && lightning.updateForRadar(radar)) {
+      mapDirty = true;
     }
   }
 
@@ -842,8 +934,8 @@ void loop() {
     updateAstronomy();
   }
 
-  if (backlightOn && radarLayerEnabled && !UI::radarPaused() &&
-      radar.frameCount() > 1 &&
+  if (backlightOn && (radarLayerEnabled || lightningLayerEnabled) &&
+      !UI::radarPaused() && radar.frameCount() > 1 &&
       due(now, lastRadarAnimation, Config::RADAR_ANIMATION_MS)) {
     lastRadarAnimation = now;
     radarFrame = (radarFrame + 1) % radar.frameCount();
@@ -877,14 +969,15 @@ void loop() {
     lastDebugHeartbeat = now;
     const WeatherSnapshot& ws = weather.snapshot();
     DebugLog::printf(
-        "HEARTBEAT ms=%u WiFi=%d AP=%d heap=%u kB forecast=%s cards=%u layers=R%d/A%d alerts=%s [%s|%s|%s] BL=%d schedule=%d wake=%d baro=%s %.1f hPa d3h=%+.1f Z=%s\n",
+        "HEARTBEAT ms=%u WiFi=%d AP=%d heap=%u kB forecast=%s cards=%u layers=R%d/L%d/A%d alerts=%s [%s|%s|%s] BL=%d schedule=%d wake=%d baro=%s %.1f hPa d3h=%+.1f Z=%s\n",
         static_cast<unsigned>(now),
         deviceConfig.stationConnected() ? 1 : 0,
         deviceConfig.portalActive() ? 1 : 0,
         static_cast<unsigned>(ESP.getFreeHeap() / 1024),
         ws.forecastValid ? ws.forecastProduct : "FAILED",
         static_cast<unsigned>(ws.forecastSlotCount),
-        radarLayerEnabled ? 1 : 0, adsbLayerEnabled ? 1 : 0,
+        radarLayerEnabled ? 1 : 0, lightningLayerEnabled ? 1 : 0,
+        adsbLayerEnabled ? 1 : 0,
         aircraftAlert.enabled ? "on" : "off", aircraftAlert.targets[0],
         aircraftAlert.targets[1], aircraftAlert.targets[2],
         backlightOn ? 1 : 0, backlightScheduledWindowActive ? 1 : 0,

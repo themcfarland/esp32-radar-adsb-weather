@@ -2,6 +2,7 @@
 
 #include <ESPmDNS.h>
 #include <Preferences.h>
+#include <Update.h>
 #include <WiFi.h>
 #include <ctype.h>
 #include <math.h>
@@ -89,11 +90,19 @@ int64_t ageMs(uint32_t now, uint32_t lastUpdate) {
 }
 
 
-const char* layerSummary(bool radar, bool adsb) {
-  if (radar && adsb) return "radar + ADS-B";
-  if (radar) return "jen radar";
-  if (adsb) return "jen ADS-B";
-  return "bez radaru a ADS-B";
+String layerSummary(bool radar, bool lightning, bool adsb) {
+  String summary;
+  if (radar) summary += "radar";
+  if (lightning) {
+    if (!summary.isEmpty()) summary += " + ";
+    summary += "blesky Blitzortung";
+  }
+  if (adsb) {
+    if (!summary.isEmpty()) summary += " + ";
+    summary += "ADS-B";
+  }
+  if (summary.isEmpty()) summary = "vsechny mapove vrstvy vypnuty";
+  return summary;
 }
 
 constexpr const char* kBacklightDayNames[BACKLIGHT_DAY_COUNT] = {
@@ -151,6 +160,8 @@ void DeviceConfigService::load() {
       settings_.wuStationId = preferences.getString("wu_station", "IPLZE179");
       settings_.adsbUrl = preferences.getString("adsb_url", "");
       settings_.radarLayerEnabled = preferences.getBool("layer_radar", true);
+      settings_.lightningLayerEnabled =
+          preferences.getBool("layer_lightning", true);
       settings_.adsbLayerEnabled = preferences.getBool("layer_adsb", true);
       settings_.aircraftAlertEnabled = preferences.getBool("alert_on", false);
 
@@ -197,7 +208,8 @@ void DeviceConfigService::load() {
       DebugLog::printf("Config: restored for SSID '%s', layers=%s\n",
                        settings_.wifiSsid.c_str(),
                        layerSummary(settings_.radarLayerEnabled,
-                                    settings_.adsbLayerEnabled));
+                                    settings_.lightningLayerEnabled,
+                                    settings_.adsbLayerEnabled).c_str());
     }
     preferences.end();
   }
@@ -330,6 +342,9 @@ void DeviceConfigService::startWebServer() {
              [this]() { handleFactoryReset(); });
   server_.on("/reboot", HTTP_POST, [this]() { handleReboot(); });
   server_.on("/lcd-resync", HTTP_POST, [this]() { handleLcdResync(); });
+  server_.on("/update", HTTP_POST,
+             [this]() { handleOtaResult(); },
+             [this]() { handleOtaUpload(); });
   server_.on("/api/status", HTTP_GET, [this]() { handleStatusJson(); });
   server_.on("/diagnostics", HTTP_GET, [this]() { handleDiagnostics(); });
   server_.on("/api/diagnostics", HTTP_GET,
@@ -432,6 +447,7 @@ bool DeviceConfigService::saveSettings() {
   preferences.putString("wu_station", settings_.wuStationId);
   ok &= preferences.putString("adsb_url", settings_.adsbUrl) > 0;
   preferences.putBool("layer_radar", settings_.radarLayerEnabled);
+  preferences.putBool("layer_lightning", settings_.lightningLayerEnabled);
   preferences.putBool("layer_adsb", settings_.adsbLayerEnabled);
   preferences.putBool("alert_on", settings_.aircraftAlertEnabled);
   preferences.putString("alert_id0", settings_.aircraftAlertTargets[0]);
@@ -494,7 +510,9 @@ String DeviceConfigService::buildPage() const {
   page += F("</code> nebo <code>http://");
   page += htmlEscape(Config::CONFIG_HOSTNAME);
   page += F(".local/</code></p><p>Aktivni vrstvy: <strong>");
-  page += layerSummary(settings_.radarLayerEnabled, settings_.adsbLayerEnabled);
+  page += layerSummary(settings_.radarLayerEnabled,
+                       settings_.lightningLayerEnabled,
+                       settings_.adsbLayerEnabled);
   page += F("</strong></p>");
   if (portalActive_) {
     page += F("<p class='warn'>Konfiguracni AP: <strong>");
@@ -521,9 +539,11 @@ String DeviceConfigService::buildPage() const {
 
   page += F("<section class='card'><h2>Vrstvy mapy</h2><label><input type='checkbox' name='layer_radar' value='1'");
   if (settings_.radarLayerEnabled) page += F(" checked");
-  page += F(">Zobrazit radarovou vrstvu</label><label><input type='checkbox' name='layer_adsb' value='1'");
+  page += F(">Zobrazit radarovou vrstvu</label><label><input type='checkbox' name='layer_lightning' value='1'");
+  if (settings_.lightningLayerEnabled) page += F(" checked");
+  page += F(">Zobrazit blesky Blitzortung LIVE</label><label><input type='checkbox' name='layer_adsb' value='1'");
   if (settings_.adsbLayerEnabled) page += F(" checked");
-  page += F(">Zobrazit letouny ADS-B</label><p class='muted'>Lze zvolit radar + ADS-B, jen radar, jen ADS-B nebo obe vrstvy vypnout. Zmena se po ulozeni projevi bez restartu.</p></section>");
+  page += F(">Zobrazit letouny ADS-B</label><p class='muted'>Vrstvy lze libovolne kombinovat. Blesky se prijimaji realtime z Blitzortung pres WSS a zarazuji se do stejnych 5min intervalu jako CHMI radar.</p></section>");
 
   page += F("<section class='card'><h2>Plan podsviceni</h2><label><input type='checkbox' name='bl_schedule' value='1'");
   if (settings_.backlightScheduleEnabled) page += F(" checked");
@@ -607,8 +627,10 @@ String DeviceConfigService::buildPage() const {
   page += String(settings_.barometerOffsetHpa, 1);
   page += F("'></div></div><div style='margin-top:14px;padding:12px;border:1px solid #31566b;border-radius:9px;background:#0b1c27'><strong>Kalibrace podle referencniho tlaku</strong><div class='row'><div><label for='baro_reference'>Referencni tlak u hladiny more (hPa)</label><input id='baro_reference' type='number' min='850' max='1100' step='0.1' placeholder='napr. 1014.0'></div><div><label>Aktualni data</label><div id='baro_calibration_data' class='muted'>Nacitam tlak BMP180 a WU...</div></div></div><button type='button' id='baro_use_wu' class='small'>Pouzit aktualni tlak z WU</button> <button type='button' id='baro_calculate' class='small'>Vypocitat nadmorskou vysku</button><p id='baro_calibration_result' class='muted'>Vypocet pouzije tlak primo z BMP180 a venkovni teplotu pouzivanou pro redukci. Vysledek se vlozi do pole nadmorske vysky; jemna korekce se vynuluje.</p></div><p class='muted'>Tlak BMP180 je tlak v miste senzoru. Hodnota kolem 974 hPa muze pri vysce priblizne 340 az 355 m odpovidat tlaku kolem 1014 hPa u hladiny more. Nadmorska vyska provadi hlavni fyzikalni prepocet; jemna korekce slouzi jen k doladeni o jednotky hPa. Trend za 3 hodiny se pocita z neupraveneho tlaku senzoru, takze kalibrace nezkresluje smer zmeny. BMP180 se hleda na 0x77 na sdilene I2C0: GPIO8 SDA / GPIO9 SCL.</p></section>");
 
-  page += F("<button type='submit'>Ulozit nastaveni</button></form><section class='card' style='margin-top:14px'><h2>Servis</h2><form method='post' action='/lcd-resync' style='display:inline'><button type='submit'>Srovnat LCD</button></form> <form method='post' action='/reboot' style='display:inline'><button type='submit'>Restart</button></form> <form method='post' action='/factory-reset' style='display:inline'><button type='submit' class='danger'>Smazat nastaveni</button></form><p class='muted'>Srovnani LCD se provede pouze rucne; firmware nespousti periodicky restart RGB DMA.</p></section>");
-  page += F("<script>const s=document.getElementById('aircraft_now');document.querySelectorAll('.assign').forEach(b=>b.addEventListener('click',()=>{if(s.value)document.getElementById('alert_target_'+b.dataset.slot).value=s.value;}));let baroDiag=null;const calData=document.getElementById('baro_calibration_data');const calResult=document.getElementById('baro_calibration_result');async function loadBaroCalibration(){try{const r=await fetch('/api/diagnostics',{cache:'no-store'});if(!r.ok)throw Error(r.status);baroDiag=await r.json();if(!baroDiag.barometer_valid){calData.textContent='BMP180 zatim nema platne mereni';return;}const raw=baroDiag.barometer_raw_pressure_hpa;const temp=baroDiag.barometer_reduction_temperature_c;const wu=baroDiag.weather_pressure_hpa;calData.textContent='BMP180 '+raw.toFixed(1)+' hPa | T '+temp.toFixed(1)+' C | WU '+(wu===null?'--':wu.toFixed(1)+' hPa');if(wu!==null&&!document.getElementById('baro_reference').value)document.getElementById('baro_reference').value=wu.toFixed(1);}catch(e){calData.textContent='Diagnostika neni dostupna: '+e;}}document.getElementById('baro_use_wu').addEventListener('click',async()=>{if(!baroDiag)await loadBaroCalibration();if(!baroDiag||baroDiag.weather_pressure_hpa===null){calResult.textContent='WU neposkytuje platny referencni tlak.';return;}document.getElementById('baro_reference').value=baroDiag.weather_pressure_hpa.toFixed(1);calResult.textContent='Referencni tlak byl prevzat z aktualni WU observation.';});document.getElementById('baro_calculate').addEventListener('click',async()=>{if(!baroDiag)await loadBaroCalibration();if(!baroDiag||!baroDiag.barometer_valid){calResult.textContent='Nejprve je nutne platne mereni BMP180.';return;}const p=Number(baroDiag.barometer_raw_pressure_hpa),p0=Number(document.getElementById('baro_reference').value),t=Number(baroDiag.barometer_reduction_temperature_c);if(!Number.isFinite(p0)||p0<850||p0>1100||!Number.isFinite(p)||p<=0){calResult.textContent='Zadejte platny referencni tlak 850 az 1100 hPa.';return;}const h=((Math.pow(p0/p,1/5.257)-1)*(t+273.15))/0.0065;if(!Number.isFinite(h)||h<-500||h>5000){calResult.textContent='Z techto hodnot nelze vypocitat platnou vysku.';return;}document.getElementById('baro_altitude').value=h.toFixed(1);document.getElementById('baro_offset').value='0.0';calResult.textContent=p.toFixed(1)+' hPa -> '+p0.toFixed(1)+' hPa pri '+t.toFixed(1)+' C: navrzena vyska '+h.toFixed(1)+' m. Stisknete Ulozit nastaveni.';});loadBaroCalibration();</script></main></body></html>");
+  page += F("<button type='submit'>Ulozit nastaveni</button></form>");
+  page += F("<section class='card' style='margin-top:14px'><h2>OTA aktualizace firmware</h2><form id='ota_form' method='post' action='/update' enctype='multipart/form-data'><label for='firmware_file'>Firmware .bin</label><input id='firmware_file' type='file' name='firmware' accept='.bin,application/octet-stream' required><button id='ota_button' type='submit' style='margin-top:12px'>Nahrat firmware pres OTA</button><p id='ota_state' class='muted'>Nahraje se firmware.bin do neaktivni OTA partition. Po uspesnem overeni se zarizeni automaticky restartuje do nove verze. Nastaveni v NVS zustanou zachovana.</p></form></section>");
+  page += F("<section class='card'><h2>Servis</h2><form method='post' action='/lcd-resync' style='display:inline'><button type='submit'>Srovnat LCD</button></form> <form method='post' action='/reboot' style='display:inline'><button type='submit'>Restart</button></form> <form method='post' action='/factory-reset' style='display:inline'><button type='submit' class='danger'>Smazat nastaveni</button></form><p class='muted'>Srovnani LCD se provede pouze rucne; firmware nespousti periodicky restart RGB DMA.</p></section>");
+  page += F("<script>const otaForm=document.getElementById('ota_form'),otaButton=document.getElementById('ota_button'),otaState=document.getElementById('ota_state');if(otaForm)otaForm.addEventListener('submit',()=>{otaButton.disabled=true;otaButton.textContent='Nahravam...';otaState.textContent='OTA zapisuje novy firmware. Nevypinejte zarizeni ani Wi-Fi.';});const s=document.getElementById('aircraft_now');document.querySelectorAll('.assign').forEach(b=>b.addEventListener('click',()=>{if(s.value)document.getElementById('alert_target_'+b.dataset.slot).value=s.value;}));let baroDiag=null;const calData=document.getElementById('baro_calibration_data');const calResult=document.getElementById('baro_calibration_result');async function loadBaroCalibration(){try{const r=await fetch('/api/diagnostics',{cache:'no-store'});if(!r.ok)throw Error(r.status);baroDiag=await r.json();if(!baroDiag.barometer_valid){calData.textContent='BMP180 zatim nema platne mereni';return;}const raw=baroDiag.barometer_raw_pressure_hpa;const temp=baroDiag.barometer_reduction_temperature_c;const wu=baroDiag.weather_pressure_hpa;calData.textContent='BMP180 '+raw.toFixed(1)+' hPa | T '+temp.toFixed(1)+' C | WU '+(wu===null?'--':wu.toFixed(1)+' hPa');if(wu!==null&&!document.getElementById('baro_reference').value)document.getElementById('baro_reference').value=wu.toFixed(1);}catch(e){calData.textContent='Diagnostika neni dostupna: '+e;}}document.getElementById('baro_use_wu').addEventListener('click',async()=>{if(!baroDiag)await loadBaroCalibration();if(!baroDiag||baroDiag.weather_pressure_hpa===null){calResult.textContent='WU neposkytuje platny referencni tlak.';return;}document.getElementById('baro_reference').value=baroDiag.weather_pressure_hpa.toFixed(1);calResult.textContent='Referencni tlak byl prevzat z aktualni WU observation.';});document.getElementById('baro_calculate').addEventListener('click',async()=>{if(!baroDiag)await loadBaroCalibration();if(!baroDiag||!baroDiag.barometer_valid){calResult.textContent='Nejprve je nutne platne mereni BMP180.';return;}const p=Number(baroDiag.barometer_raw_pressure_hpa),p0=Number(document.getElementById('baro_reference').value),t=Number(baroDiag.barometer_reduction_temperature_c);if(!Number.isFinite(p0)||p0<850||p0>1100||!Number.isFinite(p)||p<=0){calResult.textContent='Zadejte platny referencni tlak 850 az 1100 hPa.';return;}const h=((Math.pow(p0/p,1/5.257)-1)*(t+273.15))/0.0065;if(!Number.isFinite(h)||h<-500||h>5000){calResult.textContent='Z techto hodnot nelze vypocitat platnou vysku.';return;}document.getElementById('baro_altitude').value=h.toFixed(1);document.getElementById('baro_offset').value='0.0';calResult.textContent=p.toFixed(1)+' hPa -> '+p0.toFixed(1)+' hPa pri '+t.toFixed(1)+' C: navrzena vyska '+h.toFixed(1)+' m. Stisknete Ulozit nastaveni.';});loadBaroCalibration();</script></main></body></html>");
   return page;
 }
 
@@ -625,10 +647,10 @@ String DeviceConfigService::buildDiagnosticsPage() const {
   page += F("<section class='card'><h2>Pamet</h2><table><tr><td>Volna heap</td><td id='heap_free'>--</td></tr><tr><td>Minimum heap</td><td id='heap_min'>--</td></tr><tr><td>Nejvetsi heap blok</td><td id='heap_largest'>--</td></tr><tr><td>Volna PSRAM</td><td id='psram_free'>--</td></tr><tr><td>Minimum PSRAM</td><td id='psram_min'>--</td></tr><tr><td>Nejvetsi PSRAM blok</td><td id='psram_largest'>--</td></tr></table></section>");
   page += F("<section class='card'><h2>Sit</h2><table><tr><td>Rezim</td><td id='network_mode'>--</td></tr><tr><td>SSID</td><td id='ssid' class='value'>--</td></tr><tr><td>IP adresa</td><td id='ip' class='value'>--</td></tr><tr><td>Signal</td><td id='rssi'>--</td></tr><tr><td>Hostname</td><td id='hostname' class='value'>--</td></tr><tr><td>Konfiguracni AP</td><td id='portal'>--</td></tr></table></section>");
   page += F("<section class='card'><h2>Displej a mapa</h2><table><tr><td>Rozliseni</td><td>800 x 480</td></tr><tr><td>Podsviceni</td><td id='backlight_state'>--</td></tr><tr><td>Tydenni plan</td><td id='backlight_schedule'>--</td></tr><tr><td>Docasne probuzeni</td><td id='backlight_wake'>--</td></tr><tr><td>Vyrez mapy</td><td id='map_view'>--</td></tr><tr><td>Prekresleni mapy</td><td id='map_redraws'>--</td></tr><tr><td>Posledni kresleni</td><td id='map_duration'>--</td></tr><tr><td>Srovnani RGB DMA</td><td id='lcd_resyncs'>--</td></tr><tr><td>Od posledniho srovnani</td><td id='lcd_age'>--</td></tr></table></section>");
-  page += F("<section class='card wide'><h2>Datove zdroje</h2><table><tr><td>Radar</td><td id='radar_status' class='value'>--</td></tr><tr><td>Radarove snimky</td><td id='radar_frames'>--</td></tr><tr><td>Stari aktualizace radaru</td><td id='radar_age'>--</td></tr><tr><td>ADS-B</td><td id='adsb_status' class='value'>--</td></tr><tr><td>Pocet letounu</td><td id='aircraft_count'>--</td></tr><tr><td>Stari ADS-B dat</td><td id='adsb_age'>--</td></tr><tr><td>Aktualni pocasi</td><td id='weather_status' class='value'>--</td></tr><tr><td>Stari pocasi</td><td id='weather_age'>--</td></tr><tr><td>Predpoved</td><td id='forecast_status' class='value'>--</td></tr><tr><td>Stari predpovedi</td><td id='forecast_age'>--</td></tr><tr><td>Astronomie</td><td id='astronomy_status' class='value'>--</td></tr><tr><td>Stari astronomie</td><td id='astronomy_age'>--</td></tr></table></section>");
+  page += F("<section class='card wide'><h2>Datove zdroje</h2><table><tr><td>Radar</td><td id='radar_status' class='value'>--</td></tr><tr><td>Radarove snimky</td><td id='radar_frames'>--</td></tr><tr><td>Stari aktualizace radaru</td><td id='radar_age'>--</td></tr><tr><td>Blesky Blitzortung</td><td id='lightning_status' class='value'>--</td></tr><tr><td>Snimky blesku</td><td id='lightning_frames'>--</td></tr><tr><td>Stari aktualizace blesku</td><td id='lightning_age'>--</td></tr><tr><td>ADS-B</td><td id='adsb_status' class='value'>--</td></tr><tr><td>Pocet letounu</td><td id='aircraft_count'>--</td></tr><tr><td>Stari ADS-B dat</td><td id='adsb_age'>--</td></tr><tr><td>Aktualni pocasi</td><td id='weather_status' class='value'>--</td></tr><tr><td>Stari pocasi</td><td id='weather_age'>--</td></tr><tr><td>Predpoved</td><td id='forecast_status' class='value'>--</td></tr><tr><td>Stari predpovedi</td><td id='forecast_age'>--</td></tr><tr><td>Astronomie</td><td id='astronomy_status' class='value'>--</td></tr><tr><td>Stari astronomie</td><td id='astronomy_age'>--</td></tr></table></section>");
   page += F("<section class='card wide'><h2>Barometr a Zambretti</h2><table><tr><td>Povoleno</td><td id='barometer_enabled'>--</td></tr><tr><td>Senzor</td><td id='barometer_sensor' class='value'>--</td></tr><tr><td>Stav</td><td id='barometer_status' class='value'>--</td></tr><tr><td>Nastavena vyska / korekce</td><td id='barometer_calibration'>--</td></tr><tr><td>WU referencni tlak</td><td id='weather_pressure'>--</td></tr><tr><td>Tlak u hladiny more</td><td id='barometer_pressure'>--</td></tr><tr><td>Tlak senzoru</td><td id='barometer_raw_pressure'>--</td></tr><tr><td>Teplota senzoru</td><td id='barometer_temperature'>--</td></tr><tr><td>Teplota pro prepocet</td><td id='barometer_reduction_temperature'>--</td></tr><tr><td>Zdroj teploty</td><td id='barometer_reduction_source'>--</td></tr><tr><td>WU prumer / vzorky</td><td id='wu_temperature_average'>--</td></tr><tr><td>Stari posledni WU teploty</td><td id='wu_temperature_age'>--</td></tr><tr><td>Zmena za 3 h</td><td id='barometer_delta'>--</td></tr><tr><td>Trend tlaku</td><td id='barometer_trend'>--</td></tr><tr><td>Zambretti kod</td><td id='zambretti_code'>--</td></tr><tr><td>Zambretti trend</td><td id='zambretti_trend'>--</td></tr><tr><td>Zambretti predpoved</td><td id='barometer_forecast'>--</td></tr><tr><td>Korekce vetrem</td><td id='zambretti_wind'>--</td></tr><tr><td>Sezonni korekce</td><td id='zambretti_season'>--</td></tr><tr><td>Body historie</td><td id='barometer_history'>--</td></tr><tr><td>Stari mereni</td><td id='barometer_age'>--</td></tr></table></section>");
   page += F("<section class='card wide'><h2>Nastaveni zobrazeni</h2><table><tr><td>Vrstvy</td><td id='layers'>--</td></tr><tr><td>Zvyrazneni letounu</td><td id='alerts'>--</td></tr></table></section></div><p id='refresh_state' class='muted'>Nacitam...</p>");
-  page += F("<script>const $=id=>document.getElementById(id);const kb=v=>Math.round(v/1024)+' kB';const age=v=>v<0?'dosud neprovedeno':v<1000?v+' ms':v<60000?Math.round(v/1000)+' s':v<3600000?Math.round(v/60000)+' min':(v/3600000).toFixed(1)+' h';const up=v=>{let s=Math.floor(v/1000),d=Math.floor(s/86400);s%=86400;let h=Math.floor(s/3600);s%=3600;let m=Math.floor(s/60);return (d?d+' d ':'')+h+' h '+m+' min'};const yes=(v,a='ano',n='ne')=>v?'<span class=ok>'+a+'</span>':'<span class=warn>'+n+'</span>';async function loadData(){try{const r=await fetch('/api/diagnostics',{cache:'no-store'});if(!r.ok)throw Error(r.status);const d=await r.json();$('firmware').textContent=d.firmware;$('local_datetime').textContent=d.local_date+' '+d.local_time;$('timezone').textContent=d.timezone+' (automaticky CET/CEST)';$('time_sync').innerHTML=yes(d.time_synchronized,'synchronizovano','ceka na NTP');$('uptime').textContent=up(d.uptime_ms);$('cpu').textContent=d.cpu_mhz+' MHz / '+d.cpu_cores+' jadra';$('flash').textContent=kb(d.flash_bytes);$('reset_reason').textContent=d.reset_reason;$('heap_free').textContent=kb(d.heap_free);$('heap_min').textContent=kb(d.heap_min);$('heap_largest').textContent=kb(d.heap_largest);$('psram_free').textContent=kb(d.psram_free);$('psram_min').textContent=kb(d.psram_min);$('psram_largest').textContent=kb(d.psram_largest);$('network_mode').textContent=d.network_mode;$('ssid').textContent=d.ssid||'--';$('ip').textContent=d.ip;$('rssi').textContent=d.wifi_connected?d.rssi_dbm+' dBm':'--';$('hostname').textContent=d.hostname+'.local';$('portal').innerHTML=yes(d.portal_active,'aktivni','vypnuty');$('backlight_state').innerHTML=yes(d.backlight_on,'zapnuto','vypnuto');$('backlight_schedule').textContent=d.backlight_schedule_enabled?(d.backlight_window_active?'aktivni interval':'mimo aktivni interval'):'plan vypnut';$('backlight_wake').textContent=d.backlight_temporary_wake?Math.ceil(d.backlight_wake_remaining_ms/1000)+' s':'neaktivni';$('map_view').textContent=d.map_view;$('map_redraws').textContent=d.map_redraw_count;$('map_duration').textContent=d.last_map_redraw_ms+' ms';$('lcd_resyncs').textContent=d.lcd_resync_count;$('lcd_age').textContent=age(d.lcd_resync_age_ms);$('radar_status').textContent=d.radar_status;$('radar_frames').textContent=(d.radar_frame_count?(d.current_radar_frame+1)+' / '+d.radar_frame_count:'0 / 0')+' | cache '+(d.radar_cache_ready?'OK':'nepripravena');$('radar_age').textContent=age(d.radar_age_ms);$('adsb_status').textContent=d.adsb_status;$('aircraft_count').textContent=d.aircraft_count;$('adsb_age').textContent=age(d.adsb_age_ms);$('weather_status').textContent=d.weather_status+' | data '+(d.current_weather_valid?'OK':'chybi');$('weather_age').textContent=age(d.weather_age_ms);$('forecast_status').textContent=d.forecast_product+' | '+d.forecast_slot_count+' karet | '+(d.forecast_valid?'OK':'chyba');$('forecast_age').textContent=age(d.forecast_age_ms);$('astronomy_status').textContent=d.astronomy_status+' | '+(d.astronomy_valid?'OK':'chyba');$('astronomy_age').textContent=age(d.astronomy_age_ms);$('barometer_enabled').innerHTML=yes(d.barometer_enabled,'zapnut','vypnut');$('barometer_sensor').textContent=d.barometer_sensor+(d.barometer_address?' | 0x'+d.barometer_address.toString(16).toUpperCase():'');$('barometer_status').textContent=d.barometer_status;$('barometer_calibration').textContent=d.barometer_altitude_m.toFixed(1)+' m / '+(d.barometer_offset_hpa>=0?'+':'')+d.barometer_offset_hpa.toFixed(1)+' hPa';$('weather_pressure').textContent=d.weather_pressure_hpa===null?'--':d.weather_pressure_hpa.toFixed(1)+' hPa';$('barometer_pressure').textContent=d.barometer_valid?d.barometer_pressure_hpa.toFixed(1)+' hPa':'--';$('barometer_raw_pressure').textContent=d.barometer_valid?d.barometer_raw_pressure_hpa.toFixed(1)+' hPa':'--';$('barometer_temperature').textContent=d.barometer_valid?d.barometer_temperature_c.toFixed(1)+' C':'--';$('barometer_reduction_temperature').textContent=d.barometer_reduction_temperature_c===null?'--':d.barometer_reduction_temperature_c.toFixed(1)+' C';$('barometer_reduction_source').textContent=d.barometer_reduction_temperature_source;$('wu_temperature_average').textContent=d.wu_temperature_average_c===null?'bez dat':d.wu_temperature_average_c.toFixed(1)+' C | '+d.wu_temperature_sample_count+' vzorku / '+d.wu_temperature_span_h.toFixed(1)+' h';$('wu_temperature_age').textContent=d.wu_temperature_latest_epoch?age(Math.max(0,Date.now()-d.wu_temperature_latest_epoch*1000)):'bez dat';$('barometer_delta').textContent=d.barometer_delta_3h_hpa===null?'sbira se':(d.barometer_delta_3h_hpa>=0?'+':'')+d.barometer_delta_3h_hpa.toFixed(1)+' hPa';$('barometer_trend').textContent=d.barometer_trend+' | '+d.barometer_trend_hpa_h.toFixed(2)+' hPa/h';$('zambretti_code').textContent=d.zambretti_ready?d.zambretti_code:'sbira se 3h trend';$('zambretti_trend').textContent=d.zambretti_ready?d.zambretti_trend:'--';$('barometer_forecast').textContent=d.barometer_forecast;$('zambretti_wind').textContent=d.zambretti_wind_used?d.zambretti_wind_deg.toFixed(0)+' stupnu z WU':'bez smeru vetru';$('zambretti_season').textContent=d.zambretti_season_applied?'pouzita':'nepouzita';$('barometer_history').textContent=d.pressure_history_count+' / 289';$('barometer_age').textContent=age(d.barometer_age_ms);$('layers').textContent='Radar '+(d.radar_layer?'zapnut':'vypnut')+' | ADS-B '+(d.adsb_layer?'zapnuto':'vypnuto');$('alerts').textContent=d.alert_enabled?d.alert_targets.filter(Boolean).join(' | '):'vypnuto';$('refresh_state').textContent='Aktualizovano '+new Date().toLocaleTimeString();}catch(e){$('refresh_state').innerHTML='<span class=bad>Diagnostiku se nepodarilo nacist: '+e+'</span>';}}loadData();setInterval(loadData,5000);</script></main></body></html>");
+  page += F("<script>const $=id=>document.getElementById(id);const kb=v=>Math.round(v/1024)+' kB';const age=v=>v<0?'dosud neprovedeno':v<1000?v+' ms':v<60000?Math.round(v/1000)+' s':v<3600000?Math.round(v/60000)+' min':(v/3600000).toFixed(1)+' h';const up=v=>{let s=Math.floor(v/1000),d=Math.floor(s/86400);s%=86400;let h=Math.floor(s/3600);s%=3600;let m=Math.floor(s/60);return (d?d+' d ':'')+h+' h '+m+' min'};const yes=(v,a='ano',n='ne')=>v?'<span class=ok>'+a+'</span>':'<span class=warn>'+n+'</span>';async function loadData(){try{const r=await fetch('/api/diagnostics',{cache:'no-store'});if(!r.ok)throw Error(r.status);const d=await r.json();$('firmware').textContent=d.firmware;$('local_datetime').textContent=d.local_date+' '+d.local_time;$('timezone').textContent=d.timezone+' (automaticky CET/CEST)';$('time_sync').innerHTML=yes(d.time_synchronized,'synchronizovano','ceka na NTP');$('uptime').textContent=up(d.uptime_ms);$('cpu').textContent=d.cpu_mhz+' MHz / '+d.cpu_cores+' jadra';$('flash').textContent=kb(d.flash_bytes);$('reset_reason').textContent=d.reset_reason;$('heap_free').textContent=kb(d.heap_free);$('heap_min').textContent=kb(d.heap_min);$('heap_largest').textContent=kb(d.heap_largest);$('psram_free').textContent=kb(d.psram_free);$('psram_min').textContent=kb(d.psram_min);$('psram_largest').textContent=kb(d.psram_largest);$('network_mode').textContent=d.network_mode;$('ssid').textContent=d.ssid||'--';$('ip').textContent=d.ip;$('rssi').textContent=d.wifi_connected?d.rssi_dbm+' dBm':'--';$('hostname').textContent=d.hostname+'.local';$('portal').innerHTML=yes(d.portal_active,'aktivni','vypnuty');$('backlight_state').innerHTML=yes(d.backlight_on,'zapnuto','vypnuto');$('backlight_schedule').textContent=d.backlight_schedule_enabled?(d.backlight_window_active?'aktivni interval':'mimo aktivni interval'):'plan vypnut';$('backlight_wake').textContent=d.backlight_temporary_wake?Math.ceil(d.backlight_wake_remaining_ms/1000)+' s':'neaktivni';$('map_view').textContent=d.map_view;$('map_redraws').textContent=d.map_redraw_count;$('map_duration').textContent=d.last_map_redraw_ms+' ms';$('lcd_resyncs').textContent=d.lcd_resync_count;$('lcd_age').textContent=age(d.lcd_resync_age_ms);$('radar_status').textContent=d.radar_status;$('radar_frames').textContent=(d.radar_frame_count?(d.current_radar_frame+1)+' / '+d.radar_frame_count:'0 / 0')+' | cache '+(d.radar_cache_ready?'OK':'nepripravena');$('radar_age').textContent=age(d.radar_age_ms);$('lightning_status').textContent=d.lightning_status+' | '+(d.lightning_ready?'data OK':'bez dat');$('lightning_frames').textContent=d.lightning_frame_count+' / '+d.radar_frame_count+' | 5 min sloty radaru';$('lightning_age').textContent=age(d.lightning_age_ms);$('adsb_status').textContent=d.adsb_status;$('aircraft_count').textContent=d.aircraft_count;$('adsb_age').textContent=age(d.adsb_age_ms);$('weather_status').textContent=d.weather_status+' | data '+(d.current_weather_valid?'OK':'chybi');$('weather_age').textContent=age(d.weather_age_ms);$('forecast_status').textContent=d.forecast_product+' | '+d.forecast_slot_count+' karet | '+(d.forecast_valid?'OK':'chyba');$('forecast_age').textContent=age(d.forecast_age_ms);$('astronomy_status').textContent=d.astronomy_status+' | '+(d.astronomy_valid?'OK':'chyba');$('astronomy_age').textContent=age(d.astronomy_age_ms);$('barometer_enabled').innerHTML=yes(d.barometer_enabled,'zapnut','vypnut');$('barometer_sensor').textContent=d.barometer_sensor+(d.barometer_address?' | 0x'+d.barometer_address.toString(16).toUpperCase():'');$('barometer_status').textContent=d.barometer_status;$('barometer_calibration').textContent=d.barometer_altitude_m.toFixed(1)+' m / '+(d.barometer_offset_hpa>=0?'+':'')+d.barometer_offset_hpa.toFixed(1)+' hPa';$('weather_pressure').textContent=d.weather_pressure_hpa===null?'--':d.weather_pressure_hpa.toFixed(1)+' hPa';$('barometer_pressure').textContent=d.barometer_valid?d.barometer_pressure_hpa.toFixed(1)+' hPa':'--';$('barometer_raw_pressure').textContent=d.barometer_valid?d.barometer_raw_pressure_hpa.toFixed(1)+' hPa':'--';$('barometer_temperature').textContent=d.barometer_valid?d.barometer_temperature_c.toFixed(1)+' C':'--';$('barometer_reduction_temperature').textContent=d.barometer_reduction_temperature_c===null?'--':d.barometer_reduction_temperature_c.toFixed(1)+' C';$('barometer_reduction_source').textContent=d.barometer_reduction_temperature_source;$('wu_temperature_average').textContent=d.wu_temperature_average_c===null?'bez dat':d.wu_temperature_average_c.toFixed(1)+' C | '+d.wu_temperature_sample_count+' vzorku / '+d.wu_temperature_span_h.toFixed(1)+' h';$('wu_temperature_age').textContent=d.wu_temperature_latest_epoch?age(Math.max(0,Date.now()-d.wu_temperature_latest_epoch*1000)):'bez dat';$('barometer_delta').textContent=d.barometer_delta_3h_hpa===null?'sbira se':(d.barometer_delta_3h_hpa>=0?'+':'')+d.barometer_delta_3h_hpa.toFixed(1)+' hPa';$('barometer_trend').textContent=d.barometer_trend+' | '+d.barometer_trend_hpa_h.toFixed(2)+' hPa/h';$('zambretti_code').textContent=d.zambretti_ready?d.zambretti_code:'sbira se 3h trend';$('zambretti_trend').textContent=d.zambretti_ready?d.zambretti_trend:'--';$('barometer_forecast').textContent=d.barometer_forecast;$('zambretti_wind').textContent=d.zambretti_wind_used?d.zambretti_wind_deg.toFixed(0)+' stupnu z WU':'bez smeru vetru';$('zambretti_season').textContent=d.zambretti_season_applied?'pouzita':'nepouzita';$('barometer_history').textContent=d.pressure_history_count+' / 289';$('barometer_age').textContent=age(d.barometer_age_ms);$('layers').textContent='Radar '+(d.radar_layer?'zapnut':'vypnut')+' | Blesky '+(d.lightning_layer?'zapnuty':'vypnuty')+' | ADS-B '+(d.adsb_layer?'zapnuto':'vypnuto');$('alerts').textContent=d.alert_enabled?d.alert_targets.filter(Boolean).join(' | '):'vypnuto';$('refresh_state').textContent='Aktualizovano '+new Date().toLocaleTimeString();}catch(e){$('refresh_state').innerHTML='<span class=bad>Diagnostiku se nepodarilo nacist: '+e+'</span>';}}loadData();setInterval(loadData,5000);</script></main></body></html>");
   return page;
 }
 
@@ -706,6 +728,14 @@ void DeviceConfigService::handleDiagnosticsJson() {
   json += boolJson(diagnostics.radarCacheReady);
   json += F(",\"radar_age_ms\":");
   json += String(ageMs(now, diagnostics.lastRadarUpdateMs));
+  json += F(",\"lightning_status\":\"");
+  json += jsonEscape(diagnostics.lightningStatus);
+  json += F("\",\"lightning_ready\":");
+  json += boolJson(diagnostics.lightningReady);
+  json += F(",\"lightning_frame_count\":");
+  json += String(diagnostics.lightningFrameCount);
+  json += F(",\"lightning_age_ms\":");
+  json += String(ageMs(now, diagnostics.lastLightningUpdateMs));
   json += F(",\"adsb_status\":\"");
   json += jsonEscape(diagnostics.adsbStatus);
   json += F("\",\"aircraft_count\":");
@@ -816,6 +846,8 @@ void DeviceConfigService::handleDiagnosticsJson() {
   json += String(diagnostics.backlightWakeRemainingMs);
   json += F(",\"radar_layer\":");
   json += boolJson(settings_.radarLayerEnabled);
+  json += F(",\"lightning_layer\":");
+  json += boolJson(settings_.lightningLayerEnabled);
   json += F(",\"adsb_layer\":");
   json += boolJson(settings_.adsbLayerEnabled);
   json += F(",\"alert_enabled\":");
@@ -843,6 +875,7 @@ void DeviceConfigService::handleSave() {
   String newWuKey = server_.arg("wu_key");
   newWuKey.trim();
   const bool newRadarLayerEnabled = server_.hasArg("layer_radar");
+  const bool newLightningLayerEnabled = server_.hasArg("layer_lightning");
   const bool newAdsbLayerEnabled = server_.hasArg("layer_adsb");
   const bool newAlertEnabled = server_.hasArg("alert_enabled");
   String newAlertTargets[AIRCRAFT_ALERT_SLOT_COUNT];
@@ -907,6 +940,7 @@ void DeviceConfigService::handleSave() {
   settings_.wuStationId = newStation;
   if (!newWuKey.isEmpty()) settings_.wuApiKey = newWuKey;
   settings_.radarLayerEnabled = newRadarLayerEnabled;
+  settings_.lightningLayerEnabled = newLightningLayerEnabled;
   settings_.adsbLayerEnabled = newAdsbLayerEnabled;
   settings_.aircraftAlertEnabled = newAlertEnabled;
   for (size_t slot = 0; slot < AIRCRAFT_ALERT_SLOT_COUNT; ++slot) {
@@ -929,7 +963,8 @@ void DeviceConfigService::handleSave() {
   DebugLog::printf(
       "Config: saved, SSID=%s, layers=%s, alerts=%s [%s|%s|%s], barometer=%s alt=%.1f offset=%+.1f\n",
       settings_.wifiSsid.c_str(),
-      layerSummary(settings_.radarLayerEnabled, settings_.adsbLayerEnabled),
+      layerSummary(settings_.radarLayerEnabled, settings_.lightningLayerEnabled,
+                   settings_.adsbLayerEnabled).c_str(),
       settings_.aircraftAlertEnabled ? "on" : "off",
       settings_.aircraftAlertTargets[0].c_str(),
       settings_.aircraftAlertTargets[1].c_str(),
@@ -978,6 +1013,98 @@ void DeviceConfigService::handleLcdResync() {
   server_.send(303, "text/plain", "LCD resync scheduled");
 }
 
+void DeviceConfigService::handleOtaUpload() {
+  HTTPUpload& upload = server_.upload();
+
+  if (upload.status == UPLOAD_FILE_START) {
+    otaInProgress_ = true;
+    otaSucceeded_ = false;
+    otaBytesWritten_ = 0;
+    otaError_ = 0;
+    DebugLog::printf("OTA: start %s\n", upload.filename.c_str());
+
+    if (!upload.filename.endsWith(".bin")) {
+      otaError_ = -10;
+      DebugLog::println("OTA: rejected non-.bin file");
+      return;
+    }
+
+    if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH)) {
+      otaError_ = static_cast<int>(Update.getError());
+      DebugLog::printf("OTA: Update.begin failed error=%d\n", otaError_);
+      Update.printError(Serial);
+    }
+    return;
+  }
+
+  if (upload.status == UPLOAD_FILE_WRITE) {
+    if (otaError_ != 0 || !otaInProgress_) return;
+    const size_t written = Update.write(upload.buf, upload.currentSize);
+    otaBytesWritten_ += static_cast<uint32_t>(written);
+    if (written != upload.currentSize) {
+      otaError_ = static_cast<int>(Update.getError());
+      if (otaError_ == 0) otaError_ = -11;
+      DebugLog::printf("OTA: write failed %u/%u error=%d\n",
+                       static_cast<unsigned>(written),
+                       static_cast<unsigned>(upload.currentSize), otaError_);
+      Update.printError(Serial);
+    }
+    return;
+  }
+
+  if (upload.status == UPLOAD_FILE_END) {
+    if (otaError_ == 0) {
+      if (Update.end(true)) {
+        otaSucceeded_ = true;
+        DebugLog::printf("OTA: complete, %u bytes written\n",
+                         static_cast<unsigned>(otaBytesWritten_));
+      } else {
+        otaError_ = static_cast<int>(Update.getError());
+        DebugLog::printf("OTA: finalize failed error=%d\n", otaError_);
+        Update.printError(Serial);
+      }
+    } else {
+      Update.abort();
+    }
+    otaInProgress_ = false;
+    return;
+  }
+
+  if (upload.status == UPLOAD_FILE_ABORTED) {
+    Update.abort();
+    otaError_ = -12;
+    otaSucceeded_ = false;
+    otaInProgress_ = false;
+    DebugLog::println("OTA: upload aborted");
+  }
+}
+
+void DeviceConfigService::handleOtaResult() {
+  otaInProgress_ = false;
+  if (otaSucceeded_ && otaError_ == 0) {
+    String page;
+    page.reserve(900);
+    page += F("<!doctype html><meta charset='utf-8'><meta name='viewport' content='width=device-width'><style>body{font-family:Arial;background:#07131c;color:white;padding:30px;max-width:700px;margin:auto}.ok{color:#6ee7a5}</style><h1 class='ok'>OTA aktualizace uspesna</h1><p>Nahrano ");
+    page += String(otaBytesWritten_);
+    page += F(" B. Zarizeni se restartuje do noveho firmware.</p><p>Po nekolika sekundach obnovte <code>http://radar-adsb.local/</code>.</p>");
+    server_.sendHeader("Cache-Control", "no-store");
+    server_.send(200, "text/html; charset=utf-8", page);
+    restartPending_ = true;
+    restartAt_ = millis() + 1800;
+    return;
+  }
+
+  String message = F("OTA aktualizace selhala. Kod chyby: ");
+  message += String(otaError_);
+  message += F(". Puvodni firmware zustava aktivni.");
+  DebugLog::printf("OTA: failed error=%d bytes=%u\n", otaError_,
+                   static_cast<unsigned>(otaBytesWritten_));
+  // Flash writes can temporarily disturb the RGB display DMA on ESP32-S3.
+  // A failed OTA does not reboot, so force a clean LCD redraw afterwards.
+  lcdResyncRequested_ = true;
+  sendErrorPage(message, 500);
+}
+
 void DeviceConfigService::handleStatusJson() {
   String json;
   json.reserve(768);
@@ -992,6 +1119,8 @@ void DeviceConfigService::handleStatusJson() {
                              : WiFi.softAPIP().toString();
   json += F("\",\"radar_layer\":");
   json += boolJson(settings_.radarLayerEnabled);
+  json += F(",\"lightning_layer\":");
+  json += boolJson(settings_.lightningLayerEnabled);
   json += F(",\"adsb_layer\":");
   json += boolJson(settings_.adsbLayerEnabled);
   json += F(",\"alert_enabled\":");

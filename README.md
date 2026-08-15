@@ -1,11 +1,37 @@
 # Waveshare 7" Radar ČR + ADS-B + počasí
 
+
+## 0.28.4 - Blitzortung realtime + 10 km varovny kruh + OTA
+
+- Blitzortung se prijima realtime pres WSS (`ws7/ws1/ws8.blitzortung.org`) a LZW zpravy se dekoduji primo na ESP32.
+- Jednotlive blesky `time/lat/lon` se ukladaji do kruhoveho PSRAM bufferu a zobrazuji ve stejnych 5min casovych slotech jako CHMI radar.
+- WebSocket prijima blesky prubezne; po kazde petiminutove aktualizaci radaru se pouze posunou hranice sest casovych slotu.
+- Radar a blesky pouzivaji stejny index animace a stejne tlacitko pauzy.
+- Webove nastaveni obsahuje OTA upload `firmware.bin`; zapisuje se do neaktivni OTA partition a po uspechu se ESP32 restartuje. NVS nastaveni zustava zachovano.
+
 Firmware pro původní desku **Waveshare ESP32-S3-Touch-LCD-7**
 (800 × 480, ST7262, GT911, CH422G, 8 MB OPI PSRAM).
 
-Aktuální verze: **0.28.0-altitude-calibration**
+Aktuální verze: **0.28.4-lightning-proximity-alert-ota**
 
 > Projekt není určen pro varianty 7B/7C bez úpravy ovladače displeje.
+
+## Blesky Blitzortung ve verzi 0.28.4
+
+Mapa obsahuje volitelnou vrstvu **Blesky Blitzortung**. Firmware se pripojuje pres zabezpeceny WebSocket na `ws7.blitzortung.org` a pri vypadku zkusi `ws1` a `ws8`. Po spojeni odesle odber `{"a":111}`. Prichozi textove ramce jsou LZW komprimovane; firmware dekoduje pouze zacatek zpravy s poli `time`, `lat` a `lon`, pole `sig` se kvuli pameti neparsuje.
+
+Blesky z okoli CR se ukladaji do kruhoveho PSRAM bufferu. Pri vykresleni se kazdy blesk zaradi do intervalu `(cas_radaru - 5 min, cas_radaru]`, takze tlacitko pauzy i sestikrokova animace zustavaji spolecne s CHMI radarem. Po startu se historie plni postupne, protoze WebSocket dodava realtime data a neposila zpetne stare blesky.
+
+Navic bezi nezavisle realtime varovani pro domaci pozici `49.7863 N, 13.2850 E`. Pokud byl v poslednich 10 minutach prijat alespon jeden blesk do vzdalenosti 10 km, kolem domaci znacky se vykresli cerveny geograficky kruh s realnym polomerem 10 km. Vzdalenost blesku se pocita po povrchu Zeme (Haversine), takze podminka neni zavisla na zoomu ani na pixelove velikosti mapy. Varovny kruh je nezavisly na prave zobrazenem historickem radarovem snimku a sam zmizi po vyprseni desetiminutoveho okna.
+
+OTA aktualizace z webu zustava zachovana.
+
+## OTA aktualizace
+
+Na hlavní webové stránce je karta **OTA aktualizace firmware**. Vyberte
+PlatformIO `firmware.bin` a odešlete jej přes formulář. Firmware se zapisuje do
+neaktivní OTA partition `app0/app1`; po úspěšném dokončení se zařízení samo
+restartuje. NVS konfigurace se nemaže.
 
 ## Kalibrace tlaku ve verzi 0.28.0
 
@@ -79,7 +105,7 @@ až po přechodu do hlavního rozhraní.
 - první nastavení přes Wi-Fi AP,
 - trvale dostupné webové nastavení v domácí Wi-Fi,
 - grafické zvýraznění až tří letounů podle callsignu nebo ICAO hex,
-- nezávislé zapínání radarové a ADS-B vrstvy,
+- nezávislé zapínání radarové, bleskové Blitzortung a ADS-B vrstvy,
 - místní hodiny a datum s automatickým CET/CEST,
 - webová diagnostika na `/diagnostics`,
 - týdenní plán podsvícení od pondělí do neděle,

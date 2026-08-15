@@ -54,6 +54,19 @@ String radarNameForUtc(time_t timestamp) {
   return String(name);
 }
 
+int64_t daysFromCivil(int year, unsigned month, unsigned day) {
+  year -= month <= 2;
+  const int era = (year >= 0 ? year : year - 399) / 400;
+  const unsigned yearOfEra = static_cast<unsigned>(year - era * 400);
+  const int shiftedMonth = static_cast<int>(month) + (month > 2 ? -3 : 9);
+  const unsigned dayOfYear =
+      (153U * static_cast<unsigned>(shiftedMonth) + 2U) / 5U + day - 1U;
+  const unsigned dayOfEra = yearOfEra * 365U + yearOfEra / 4U -
+                            yearOfEra / 100U + dayOfYear;
+  return static_cast<int64_t>(era) * 146097LL +
+         static_cast<int64_t>(dayOfEra) - 719468LL;
+}
+
 float mercatorY(float latitudeDeg) {
   const float latitude = constrain(latitudeDeg, -85.0f, 85.0f) * DEG_TO_RAD;
   return logf(tanf(PI * 0.25f + latitude * 0.5f));
@@ -915,6 +928,36 @@ bool RadarService::updateFrames() {
 const char* RadarService::frameName(uint8_t index) const {
   if (index >= availableFrames_) return "";
   return names_[index].c_str();
+}
+
+bool RadarService::frameTimeUtc(uint8_t index, time_t& timestamp) const {
+  timestamp = 0;
+  if (index >= availableFrames_) return false;
+
+  int year = 0;
+  int month = 0;
+  int day = 0;
+  int hour = 0;
+  int minute = 0;
+  if (sscanf(names_[index].c_str(),
+             "pacz2gmaps3.z_max3d.%4d%2d%2d.%2d%2d.0.png",
+             &year, &month, &day, &hour, &minute) != 5) {
+    return false;
+  }
+
+  if (month < 1 || month > 12 || day < 1 || day > 31 || hour < 0 ||
+      hour > 23 || minute < 0 || minute > 59) {
+    return false;
+  }
+  const int64_t seconds =
+      daysFromCivil(year, static_cast<unsigned>(month),
+                    static_cast<unsigned>(day)) *
+          86400LL +
+      static_cast<int64_t>(hour) * 3600LL +
+      static_cast<int64_t>(minute) * 60LL;
+  if (seconds <= 0) return false;
+  timestamp = static_cast<time_t>(seconds);
+  return true;
 }
 
 void* RadarService::pngOpen(const char* filename, int32_t* size) {

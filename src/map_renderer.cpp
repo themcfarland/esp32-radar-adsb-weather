@@ -581,6 +581,56 @@ void drawZoomBadge(lv_obj_t* canvas, uint16_t* buffer, uint16_t width,
            &lv_font_montserrat_12, LV_TEXT_ALIGN_CENTER);
 }
 
+void drawGeographicCircle(uint16_t* buffer, uint16_t width, uint16_t height,
+                          const MapViewport& viewport, float centerLatDeg,
+                          float centerLonDeg, float radiusKm, uint16_t c) {
+  if (!buffer || radiusKm <= 0.0f) return;
+
+  constexpr float kEarthRadiusKm = 6371.0088f;
+  constexpr int kSegments = 96;
+  const float angularDistance = radiusKm / kEarthRadiusKm;
+  const float centerLat = centerLatDeg * DEG_TO_RAD;
+  const float centerLon = centerLonDeg * DEG_TO_RAD;
+
+  int previousX = 0;
+  int previousY = 0;
+  bool havePrevious = false;
+  for (int i = 0; i <= kSegments; ++i) {
+    const float bearing = 2.0f * PI * static_cast<float>(i) /
+                          static_cast<float>(kSegments);
+    const float lat = asinf(sinf(centerLat) * cosf(angularDistance) +
+                            cosf(centerLat) * sinf(angularDistance) *
+                                cosf(bearing));
+    const float lon = centerLon +
+                      atan2f(sinf(bearing) * sinf(angularDistance) *
+                                 cosf(centerLat),
+                             cosf(angularDistance) -
+                                 sinf(centerLat) * sinf(lat));
+    const int x = mapX(lon * RAD_TO_DEG, width, viewport);
+    const int y = mapY(lat * RAD_TO_DEG, height, viewport);
+    if (havePrevious) {
+      line(buffer, width, height, previousX, previousY, x, y, c);
+    }
+    previousX = x;
+    previousY = y;
+    havePrevious = true;
+  }
+}
+
+void drawLightningProximityAlert(uint16_t* buffer, uint16_t width,
+                                 uint16_t height,
+                                 const MapViewport& viewport) {
+  const uint16_t red = color(0xFF2020);
+  // Outer edge is the requested true 10 km geodesic radius. The second line
+  // sits just inside it to remain visible even in the full-country view.
+  drawGeographicCircle(buffer, width, height, viewport, Config::FALLBACK_LAT,
+                       Config::FALLBACK_LON,
+                       Config::LIGHTNING_ALERT_RADIUS_KM, red);
+  drawGeographicCircle(buffer, width, height, viewport, Config::FALLBACK_LAT,
+                       Config::FALLBACK_LON,
+                       Config::LIGHTNING_ALERT_RADIUS_KM - 0.20f, red);
+}
+
 void drawStation(uint16_t* buffer, uint16_t width, uint16_t height,
                  const MapViewport& viewport) {
   if (!geoVisible(Config::FALLBACK_LON, Config::FALLBACK_LAT, viewport)) return;
@@ -728,7 +778,8 @@ void drawBase(lv_obj_t* canvas, uint16_t* buffer, uint16_t width,
 
 void drawReference(lv_obj_t* canvas, uint16_t* buffer, uint16_t width,
                    uint16_t height, const MapViewport& viewport,
-                   bool radarLayerEnabled, bool adsbLayerEnabled) {
+                   bool radarLayerEnabled, bool lightningLayerEnabled,
+                   bool adsbLayerEnabled, bool lightningProximityAlert) {
   const uint16_t borderShadow = color(0x081018);
   const uint16_t border = color(0xDCEAF2);
   const uint16_t city = color(0xFFFFFF);
@@ -755,18 +806,30 @@ void drawReference(lv_obj_t* canvas, uint16_t* buffer, uint16_t width,
     }
   }
 
+  if (lightningProximityAlert) {
+    drawLightningProximityAlert(buffer, width, height, viewport);
+  }
   drawStation(buffer, width, height, viewport);
   if (radarLayerEnabled) drawLegend(canvas, buffer, width, height);
   drawZoomBadge(canvas, buffer, width, height, viewport);
 
   fillRect(buffer, width, height, 0, height - 22, width, 22, color(0x071018));
-  const char* layerText = radarLayerEnabled && adsbLayerEnabled
-                              ? "Vrstvy: RADAR + ADS-B"
-                              : radarLayerEnabled
-                                    ? "Vrstvy: RADAR"
-                                    : adsbLayerEnabled ? "Vrstvy: ADS-B"
-                                                       : "Vrstvy: vypnuty";
-  char footer[96];
+  char layerText[72] = "Vrstvy:";
+  bool anyLayer = false;
+  if (radarLayerEnabled) {
+    strlcat(layerText, " RADAR", sizeof(layerText));
+    anyLayer = true;
+  }
+  if (lightningLayerEnabled) {
+    strlcat(layerText, anyLayer ? " + BLESKY" : " BLESKY", sizeof(layerText));
+    anyLayer = true;
+  }
+  if (adsbLayerEnabled) {
+    strlcat(layerText, anyLayer ? " + ADS-B" : " ADS-B", sizeof(layerText));
+    anyLayer = true;
+  }
+  if (!anyLayer) strlcat(layerText, " vypnuty", sizeof(layerText));
+  char footer[112];
   snprintf(footer, sizeof(footer), "%s | tap: 50 > 25 > 10 > CR", layerText);
   drawText(canvas, 10, height - 18, 340, footer, 0x91A9B7,
            &lv_font_montserrat_10);

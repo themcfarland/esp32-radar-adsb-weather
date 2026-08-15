@@ -130,6 +130,7 @@ struct RuntimeDiagnostics {
   uint32_t uptimeMs = 0;
   uint32_t lastAdsbUpdateMs = 0;
   uint32_t lastRadarUpdateMs = 0;
+  uint32_t lastLightningUpdateMs = 0;
   uint32_t lastCurrentWeatherUpdateMs = 0;
   uint32_t lastForecastUpdateMs = 0;
   uint32_t lastAstronomyUpdateMs = 0;
@@ -140,9 +141,11 @@ struct RuntimeDiagnostics {
   uint32_t lastMapRedrawDurationMs = 0;
   uint8_t radarFrameCount = 0;
   uint8_t currentRadarFrame = 0;
+  uint8_t lightningFrameCount = 0;
   uint8_t forecastSlotCount = 0;
   size_t aircraftCount = 0;
   bool radarCacheReady = false;
+  bool lightningReady = false;
   bool currentWeatherValid = false;
   float weatherPressureHpa = NAN;
   bool forecastValid = false;
@@ -160,6 +163,7 @@ struct RuntimeDiagnostics {
   char localDate[16] = "--.--.----";
   char timezone[12] = "CET/CEST";
   char radarStatus[112] = "Radar: waiting";
+  char lightningStatus[112] = "Blesky: waiting";
   char adsbStatus[80] = "ADSB: waiting";
   char weatherStatus[96] = "Weather: waiting";
   char astronomyStatus[48] = "Astronomy: waiting";

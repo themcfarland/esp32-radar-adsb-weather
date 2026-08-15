@@ -1,3 +1,41 @@
+## 0.28.4-lightning-proximity-alert-ota
+
+- Added realtime lightning proximity warning around the home/station position.
+- A Blitzortung strike from the last 10 minutes inside a true 10 km great-circle radius activates the warning.
+- Draws a red geographic 10 km outline around the home marker; the geometry stays correct in full Czech Republic and 50/25/10 km zoom modes.
+- The warning is independent of the currently animated five-minute radar frame and clears automatically when the last nearby strike becomes older than 10 minutes.
+- Existing Blitzortung WSS/LZW stream, synchronized radar animation and browser OTA are retained.
+
+## 0.28.3-blitzortung-realtime-ota
+
+- Replaced EUMETSAT PNG/WMS lightning overlays with realtime Blitzortung WebSocket strikes.
+- Added WSS fallback rotation `ws7 -> ws1 -> ws8`, subscription `{"a":111}`, heartbeat and reconnect handling.
+- Added ESP32 LZW decoder compatible with the browser stream; only the message header (`time`, `lat`, `lon`) is decoded, avoiding the large `sig` station array.
+- Stores up to 4096 nearby strikes in PSRAM and groups them into the same six five-minute slots as the CHMI radar animation.
+- Draws individual yellow/white lightning symbols below borders/cities/ADS-B, including 50/25/10 km zoom views.
+- Browser OTA from 0.28.2 is retained unchanged.
+
+## 0.28.2-lightning-animation-ota
+
+- Added six-frame EUMETSAT MTG-LI AFA animation synchronized to the six CHMI radar frame timestamps.
+- AFA WMS `time=` requests are shifted by one five-minute step because EUMETView timestamps each 5-minute accumulation by interval start while CHMI radar filenames represent interval end.
+- Runtime lightning refresh reuses matching PSRAM overlays and normally downloads only one new frame every five minutes.
+- Lightning animation now follows the same frame index and pause state as the radar animation.
+- Added browser-based OTA firmware upload using the existing dual OTA app partitions. Successful uploads reboot into the new firmware and preserve NVS settings.
+
+## 0.28.1 - EUMETSAT MTG-LI lightning overlay
+
+### Added
+- Optional EUMETSAT MTG Lightning Imager `mtg_fd:li_afa` WMS layer over the Czech map.
+- Five-minute lightning refresh with PNG validation and atomic replacement of the last valid overlay.
+- Compact RGB332 lightning overlay in PSRAM, including Web Mercator resampling for 50/25/10 km map zooms.
+- Independent lightning layer switch in web settings with NVS persistence.
+- Lightning source, readiness and update age in web diagnostics and JSON APIs.
+
+### Preserved
+- CHMI radar remains below the lightning layer; borders, cities and ADS-B aircraft stay above it.
+- Existing BMP180 altitude calibration, Zambretti, LCD timing and RAM-only radar protections remain unchanged.
+
 ## 0.28.0 - Altitude calibration helper
 
 ### Added

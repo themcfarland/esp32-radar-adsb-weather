@@ -21,6 +21,7 @@ struct DeviceSettings {
   String wuStationId;
   String adsbUrl;
   bool radarLayerEnabled = true;
+  bool lightningLayerEnabled = true;
   bool adsbLayerEnabled = true;
   bool aircraftAlertEnabled = false;
   String aircraftAlertTargets[AIRCRAFT_ALERT_SLOT_COUNT];
@@ -51,6 +52,7 @@ class DeviceConfigService {
   AircraftAlertConfig alertConfig() const;
   bool consumeRuntimeSettingsChanged();
   bool consumeLcdResyncRequested();
+  bool otaInProgress() const { return otaInProgress_; }
 
  private:
   void startWebServer();
@@ -63,6 +65,8 @@ class DeviceConfigService {
   void handleFactoryReset();
   void handleReboot();
   void handleLcdResync();
+  void handleOtaUpload();
+  void handleOtaResult();
   void handleStatusJson();
   void handleDiagnostics();
   void handleDiagnosticsJson();
@@ -83,6 +87,10 @@ class DeviceConfigService {
   bool restartPending_ = false;
   bool runtimeSettingsChanged_ = false;
   bool lcdResyncRequested_ = false;
+  bool otaInProgress_ = false;
+  bool otaSucceeded_ = false;
+  uint32_t otaBytesWritten_ = 0;
+  int otaError_ = 0;
   uint32_t restartAt_ = 0;
   String accessPointSsid_;
 };

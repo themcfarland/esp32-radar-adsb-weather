@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <FS.h>
 #include <PNGdec.h>
+#include <time.h>
 
 #include "config.h"
 #include "map_viewport.h"
@@ -34,6 +35,7 @@ class RadarService {
   uint8_t frameCount() const { return availableFrames_; }
   const char* status() const { return status_; }
   const char* frameName(uint8_t index) const;
+  bool frameTimeUtc(uint8_t index, time_t& timestamp) const;
   uint16_t sourceWidth() const { return sourceWidth_; }
   uint16_t sourceHeight() const { return sourceHeight_; }
 
