@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Focused static audit for v0.28.4 Blitzortung proximity alert + OTA."""
+"""Focused static audit for v0.28.5 Blitzortung proximity alert + stable OTA screen."""
 from pathlib import Path
 import re
 import sys
@@ -42,8 +42,17 @@ ui_cpp = read("src/ui.cpp")
 patch = read("scripts/patch_display_driver.py")
 readme = read("README.md")
 
-require("0.28.4-lightning-proximity-alert-ota" in version,
-        "firmware version is not v0.28.4-lightning-proximity-alert-ota")
+require("0.28.5-ota-screen" in version,
+        "firmware version is not v0.28.5-ota-screen")
+require("showOtaScreen" in ui_cpp and "finishOtaScreen" in ui_cpp,
+        "minimal OTA LCD screen is missing")
+require("OtaDisplayEvent::Progress" in main and
+        "esp_lcd_rgb_panel_restart" in main,
+        "OTA progress does not resynchronise RGB panel DMA")
+require("64U * 1024U" in device_cpp and "otaDisplayCallback_" in device_cpp,
+        "OTA display refresh throttling/callback is missing")
+require('setBacklight(true, "OTA update")' in main,
+        "OTA update does not force LCD backlight on")
 require("LIGHTNING_ALERT_RADIUS_KM = 10.0f" in config and
         "LIGHTNING_ALERT_MAX_AGE_SEC = 10UL * 60UL" in config,
         "10 km / 10 min lightning proximity alert constants are missing")
@@ -322,7 +331,7 @@ require("esp_lcd_rgb_panel_restart" in main,
 require("periodic LCD watchdog" not in main and
         "DISPLAY_SYNC_RECOVERY_MS" not in config,
         "periodic LCD watchdog must remain disabled")
-require(main.count("void setBacklight(bool on, const char* reason)") == 1,
+require(main.count("void setBacklight(bool on, const char* reason) {") == 1,
         "duplicate setBacklight definition detected")
 
 m = re.search(r"bool RadarService::updateFramesInMemory\(\) \{(.*?)\n\}",

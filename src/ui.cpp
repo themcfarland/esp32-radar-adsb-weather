@@ -70,6 +70,11 @@ lv_timer_t* gStartupAnimationTimer = nullptr;
 uint8_t gStartupAnimationPhase = 0;
 bool gStartupActive = false;
 
+lv_obj_t* gOtaScreen = nullptr;
+lv_obj_t* gOtaStatus = nullptr;
+lv_obj_t* gOtaBytes = nullptr;
+lv_obj_t* gOtaResult = nullptr;
+
 void startupAnimationTimer(lv_timer_t*) {
   if (!gStartupActive) return;
   gStartupAnimationPhase = static_cast<uint8_t>((gStartupAnimationPhase + 1) % 8);
@@ -540,6 +545,107 @@ void showMainScreen() {
   gStartupCenterLabel = nullptr;
   for (lv_obj_t*& dot : gStartupDots) dot = nullptr;
   if (previous && previous != gMainScreen) lv_obj_del(previous);
+}
+
+void showOtaScreen(const char* filename, const char* versionText) {
+  if (gOtaScreen) {
+    lv_obj_del(gOtaScreen);
+    gOtaScreen = nullptr;
+  }
+
+  gOtaScreen = lv_obj_create(nullptr);
+  if (!gOtaScreen) return;
+  applyPanelStyle(gOtaScreen, 0x061019);
+
+  makeLabel(gOtaScreen, 0, 74, Config::SCREEN_W,
+            "AKTUALIZACE FIRMWARE", &lv_font_montserrat_24, 0x42B7F5,
+            LV_TEXT_ALIGN_CENTER);
+
+  lv_obj_t* panel = lv_obj_create(gOtaScreen);
+  lv_obj_set_pos(panel, 120, 142);
+  lv_obj_set_size(panel, 560, 218);
+  applyPanelStyle(panel, 0x0D202C, 14, 0x254C61, 2);
+
+  gOtaStatus = makeLabel(panel, 30, 34, 500,
+                         "Nahravam novy firmware...",
+                         &lv_font_montserrat_16, 0xDCE7ED,
+                         LV_TEXT_ALIGN_CENTER);
+
+  gOtaBytes = makeLabel(panel, 30, 82, 500, "Nahrano: 0 kB",
+                        &lv_font_montserrat_24, 0xFFD166,
+                        LV_TEXT_ALIGN_CENTER);
+
+  gOtaResult = makeLabel(panel, 30, 136, 500,
+                         "NEVYPINEJTE ZARIZENI",
+                         &lv_font_montserrat_16, 0xFF8F70,
+                         LV_TEXT_ALIGN_CENTER);
+
+  char fileLine[96];
+  snprintf(fileLine, sizeof(fileLine), "Soubor: %s",
+           filename && filename[0] ? filename : "firmware.bin");
+  makeLabel(gOtaScreen, 80, 386, 640, fileLine,
+            &lv_font_montserrat_12, 0x8298A5, LV_TEXT_ALIGN_CENTER);
+
+  char versionLine[96];
+  snprintf(versionLine, sizeof(versionLine), "Aktualni firmware: %s",
+           versionText && versionText[0] ? versionText : "--");
+  makeLabel(gOtaScreen, 80, 416, 640, versionLine,
+            &lv_font_montserrat_12, 0x8298A5, LV_TEXT_ALIGN_CENTER);
+
+  lv_scr_load(gOtaScreen);
+  lv_obj_invalidate(gOtaScreen);
+}
+
+void updateOtaScreen(uint32_t bytesWritten) {
+  if (!gOtaScreen) return;
+  if (gOtaStatus) lv_label_set_text(gOtaStatus, "Nahravam novy firmware...");
+  if (gOtaBytes) {
+    char text[48];
+    if (bytesWritten >= 1024U * 1024U) {
+      const float mib = static_cast<float>(bytesWritten) / (1024.0f * 1024.0f);
+      snprintf(text, sizeof(text), "Nahrano: %.2f MB", mib);
+    } else {
+      snprintf(text, sizeof(text), "Nahrano: %u kB",
+               static_cast<unsigned>(bytesWritten / 1024U));
+    }
+    lv_label_set_text(gOtaBytes, text);
+  }
+  lv_obj_invalidate(gOtaScreen);
+}
+
+void finishOtaScreen(bool success, uint32_t bytesWritten, int errorCode) {
+  if (!gOtaScreen) return;
+  updateOtaScreen(bytesWritten);
+  if (gOtaStatus) {
+    lv_label_set_text(gOtaStatus,
+                      success ? "Firmware byl uspesne nahran."
+                              : "Aktualizace firmware selhala.");
+    lv_obj_set_style_text_color(
+        gOtaStatus, lv_color_hex(success ? 0x6EE7A5 : 0xFF8F70), 0);
+  }
+  if (gOtaResult) {
+    if (success) {
+      lv_label_set_text(gOtaResult, "RESTARTUJI ZARIZENI...");
+      lv_obj_set_style_text_color(gOtaResult, lv_color_hex(0x6EE7A5), 0);
+    } else {
+      char text[64];
+      snprintf(text, sizeof(text), "Chyba OTA: %d", errorCode);
+      lv_label_set_text(gOtaResult, text);
+      lv_obj_set_style_text_color(gOtaResult, lv_color_hex(0xFF8F70), 0);
+    }
+  }
+  lv_obj_invalidate(gOtaScreen);
+}
+
+void hideOtaScreen() {
+  if (!gMainScreen) return;
+  lv_obj_t* ota = gOtaScreen;
+  lv_scr_load(gMainScreen);
+  gOtaScreen = nullptr;
+  gOtaStatus = nullptr;
+  gOtaBytes = nullptr;
+  gOtaResult = nullptr;
+  if (ota && ota != gMainScreen) lv_obj_del(ota);
 }
 
 bool begin() {

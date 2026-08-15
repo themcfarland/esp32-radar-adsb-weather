@@ -1,7 +1,7 @@
 # Waveshare 7" Radar ČR + ADS-B + počasí
 
 
-## 0.28.4 - Blitzortung realtime + 10 km varovny kruh + OTA
+## 0.28.5 - Blitzortung realtime + 10 km varovny kruh + stabilni OTA obrazovka
 
 - Blitzortung se prijima realtime pres WSS (`ws7/ws1/ws8.blitzortung.org`) a LZW zpravy se dekoduji primo na ESP32.
 - Jednotlive blesky `time/lat/lon` se ukladaji do kruhoveho PSRAM bufferu a zobrazuji ve stejnych 5min casovych slotech jako CHMI radar.
@@ -12,11 +12,11 @@
 Firmware pro původní desku **Waveshare ESP32-S3-Touch-LCD-7**
 (800 × 480, ST7262, GT911, CH422G, 8 MB OPI PSRAM).
 
-Aktuální verze: **0.28.4-lightning-proximity-alert-ota**
+Aktuální verze: **0.28.5-ota-screen**
 
 > Projekt není určen pro varianty 7B/7C bez úpravy ovladače displeje.
 
-## Blesky Blitzortung ve verzi 0.28.4
+## Blesky Blitzortung ve verzi 0.28.5
 
 Mapa obsahuje volitelnou vrstvu **Blesky Blitzortung**. Firmware se pripojuje pres zabezpeceny WebSocket na `ws7.blitzortung.org` a pri vypadku zkusi `ws1` a `ws8`. Po spojeni odesle odber `{"a":111}`. Prichozi textove ramce jsou LZW komprimovane; firmware dekoduje pouze zacatek zpravy s poli `time`, `lat` a `lon`, pole `sig` se kvuli pameti neparsuje.
 
@@ -423,3 +423,8 @@ Příklad: místní tlak `974 hPa` a referenční tlak `1014 hPa` odpovídají p
 
 Po výpočtu se hodnota pouze vloží do formuláře. Uživatel ji musí potvrdit tlačítkem **Uložit nastavení**. Jemná korekce MSL se při automatickém výpočtu nastaví na `0,0 hPa`; používat se má jen k doladění o malé zbytkové odchylky. Tříhodinový trend se stále počítá z neupraveného tlaku senzoru.
 
+
+
+## OTA display
+
+During browser OTA the LCD switches to a minimal static update screen. The main dashboard and network data tasks remain paused while flash is written; the RGB panel is periodically resynchronised to prevent display scrambling.

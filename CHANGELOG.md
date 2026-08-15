@@ -1,3 +1,12 @@
+## 0.28.5-ota-screen
+
+- Added a dedicated minimal full-screen OTA view on the 7-inch LCD.
+- The OTA screen is rendered before `Update.begin()` and shows only firmware upload state, bytes written and a do-not-power-off warning.
+- Radar, Blitzortung, weather, map redraws and settings work remain paused for the complete OTA POST transaction.
+- RGB panel DMA is resynchronised approximately every 64 KiB / 400 ms of flash writes and again after OTA finalisation, greatly reducing the scrambled-display effect during browser OTA.
+- Successful OTA shows a restart message until reboot; failed OTA shows the error briefly, restores the dashboard and performs one final LCD resync.
+- Existing realtime Blitzortung lightning, 10 km lightning proximity warning and OTA partition safety are retained.
+
 ## 0.28.4-lightning-proximity-alert-ota
 
 - Added realtime lightning proximity warning around the home/station position.

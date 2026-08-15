@@ -8,6 +8,18 @@
 
 constexpr size_t BACKLIGHT_DAY_COUNT = 7;
 
+enum class OtaDisplayEvent : uint8_t {
+  Start,
+  Progress,
+  Success,
+  Failure,
+};
+
+using OtaDisplayCallback = void (*)(OtaDisplayEvent event,
+                                    const char* filename,
+                                    uint32_t bytesWritten,
+                                    int errorCode);
+
 struct BacklightDaySchedule {
   bool enabled = true;
   uint16_t startMinutes = 6U * 60U;
@@ -53,6 +65,9 @@ class DeviceConfigService {
   bool consumeRuntimeSettingsChanged();
   bool consumeLcdResyncRequested();
   bool otaInProgress() const { return otaInProgress_; }
+  void setOtaDisplayCallback(OtaDisplayCallback callback) {
+    otaDisplayCallback_ = callback;
+  }
 
  private:
   void startWebServer();
@@ -88,6 +103,10 @@ class DeviceConfigService {
   bool runtimeSettingsChanged_ = false;
   bool lcdResyncRequested_ = false;
   bool otaInProgress_ = false;
+  OtaDisplayCallback otaDisplayCallback_ = nullptr;
+  String otaFilename_;
+  uint32_t otaLastDisplayBytes_ = 0;
+  uint32_t otaLastDisplayMs_ = 0;
   bool otaSucceeded_ = false;
   uint32_t otaBytesWritten_ = 0;
   int otaError_ = 0;

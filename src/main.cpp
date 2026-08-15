@@ -65,6 +65,8 @@ uint32_t backlightWakeUntil = 0;
 bool barometerInitialized = false;
 String barometerWuStationId;
 bool startupScreenActive = false;
+bool otaScreenActive = false;
+uint32_t otaScreenDismissAt = 0;
 
 namespace {
 bool isUnsetValue(const String& value) {
@@ -264,6 +266,77 @@ void requestDisplaySyncRecovery(const char* reason) {
                      reason ? reason : "runtime operation");
   }
   lastDisplaySyncRecovery = millis();
+}
+
+void setBacklight(bool on, const char* reason);
+
+void forceDisplayRefresh() {
+  if (!lvgl_port_lock(500)) return;
+  lv_disp_t* display = lv_disp_get_default();
+  if (display) lv_refr_now(display);
+  lvgl_port_unlock();
+}
+
+void handleOtaDisplayEvent(OtaDisplayEvent event, const char* filename,
+                           uint32_t bytesWritten, int errorCode) {
+  switch (event) {
+    case OtaDisplayEvent::Start:
+      otaScreenActive = true;
+      otaScreenDismissAt = 0;
+      // An OTA started from the browser must remain visible even when the
+      // weekly backlight schedule currently has the panel switched off.
+      setBacklight(true, "OTA update");
+      if (lvgl_port_lock(500)) {
+        UI::showOtaScreen(filename, FW_VERSION);
+        lv_disp_t* display = lv_disp_get_default();
+        if (display) lv_refr_now(display);
+        lvgl_port_unlock();
+      }
+      // Let the simple scene reach the framebuffer before Update.begin() may
+      // erase the inactive application partition.
+      delay(35);
+      requestDisplaySyncRecovery("OTA screen start");
+      forceDisplayRefresh();
+      DebugLog::println("OTA display: minimal update screen active");
+      break;
+
+    case OtaDisplayEvent::Progress:
+      // Recover RGB DMA after a batch of flash writes, then repaint just the
+      // tiny byte counter. This avoids the map/sidebar redraws that previously
+      // made the LCD look scrambled during browser OTA.
+      requestDisplaySyncRecovery("OTA flash progress");
+      if (lvgl_port_lock(500)) {
+        UI::updateOtaScreen(bytesWritten);
+        lv_disp_t* display = lv_disp_get_default();
+        if (display) lv_refr_now(display);
+        lvgl_port_unlock();
+      }
+      break;
+
+    case OtaDisplayEvent::Success:
+      requestDisplaySyncRecovery("OTA finalize success");
+      if (lvgl_port_lock(500)) {
+        UI::finishOtaScreen(true, bytesWritten, 0);
+        lv_disp_t* display = lv_disp_get_default();
+        if (display) lv_refr_now(display);
+        lvgl_port_unlock();
+      }
+      otaScreenActive = true;
+      otaScreenDismissAt = 0;  // successful OTA reboots instead
+      break;
+
+    case OtaDisplayEvent::Failure:
+      requestDisplaySyncRecovery("OTA failure");
+      if (lvgl_port_lock(500)) {
+        UI::finishOtaScreen(false, bytesWritten, errorCode);
+        lv_disp_t* display = lv_disp_get_default();
+        if (display) lv_refr_now(display);
+        lvgl_port_unlock();
+      }
+      otaScreenActive = true;
+      otaScreenDismissAt = millis() + 2500U;
+      break;
+  }
 }
 
 bool deadlinePending(uint32_t now, uint32_t deadline) {
@@ -639,6 +712,7 @@ void setup() {
   tzset();
   printHardwareInfo();
   loadMapViewport();
+  deviceConfig.setOtaDisplayCallback(handleOtaDisplayEvent);
   deviceConfig.load();
   applyDeviceSettings();
 
@@ -755,10 +829,27 @@ void loop() {
   updateRuntimeDiagnostics();
   deviceConfig.loop();
 
-  // While the web OTA handler is writing the inactive app partition, avoid
-  // radar downloads, redraws and other flash/network work. WebServer still
-  // receives the next upload chunk because deviceConfig.loop() runs first.
-  if (deviceConfig.otaInProgress()) {
+  // On a failed/aborted OTA keep the result visible briefly, then return to
+  // the unchanged dashboard and perform one clean RGB-panel resynchronisation.
+  if (otaScreenActive && otaScreenDismissAt != 0 &&
+      static_cast<int32_t>(now - otaScreenDismissAt) >= 0) {
+    if (lvgl_port_lock(500)) {
+      UI::hideOtaScreen();
+      lv_disp_t* display = lv_disp_get_default();
+      if (display) lv_refr_now(display);
+      lvgl_port_unlock();
+    }
+    otaScreenActive = false;
+    otaScreenDismissAt = 0;
+    requestDisplaySyncRecovery("OTA failure return to dashboard");
+    mapDirty = true;
+  }
+
+  // While OTA is active (or its simple result screen is intentionally kept
+  // visible), do not run radar, Blitzortung, weather, map redraws or settings
+  // writes. WebServer still receives upload chunks because deviceConfig.loop()
+  // runs first.
+  if (deviceConfig.otaInProgress() || otaScreenActive) {
     delay(1);
     return;
   }

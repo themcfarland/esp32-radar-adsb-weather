@@ -12,6 +12,14 @@ void completeStartup(const char* finalStatus, bool success = true);
 bool startupActive();
 void showMainScreen();
 
+// Minimal static screen used while OTA writes the inactive firmware partition.
+// Keeping the active LVGL scene small reduces RGB-panel traffic during flash
+// operations on the ESP32-S3.
+void showOtaScreen(const char* filename, const char* versionText);
+void updateOtaScreen(uint32_t bytesWritten);
+void finishOtaScreen(bool success, uint32_t bytesWritten, int errorCode);
+void hideOtaScreen();
+
 bool begin();
 lv_obj_t* mapCanvas();
 uint16_t* mapBuffer();

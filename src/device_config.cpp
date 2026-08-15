@@ -1021,11 +1021,24 @@ void DeviceConfigService::handleOtaUpload() {
     otaSucceeded_ = false;
     otaBytesWritten_ = 0;
     otaError_ = 0;
+    otaFilename_ = upload.filename;
+    otaLastDisplayBytes_ = 0;
+    otaLastDisplayMs_ = millis();
     DebugLog::printf("OTA: start %s\n", upload.filename.c_str());
+
+    // Draw the tiny OTA scene before the first flash erase/write. This gives
+    // the RGB panel a stable framebuffer instead of the large map scene.
+    if (otaDisplayCallback_) {
+      otaDisplayCallback_(OtaDisplayEvent::Start, otaFilename_.c_str(), 0, 0);
+    }
 
     if (!upload.filename.endsWith(".bin")) {
       otaError_ = -10;
       DebugLog::println("OTA: rejected non-.bin file");
+      if (otaDisplayCallback_) {
+        otaDisplayCallback_(OtaDisplayEvent::Failure, otaFilename_.c_str(),
+                            otaBytesWritten_, otaError_);
+      }
       return;
     }
 
@@ -1033,6 +1046,10 @@ void DeviceConfigService::handleOtaUpload() {
       otaError_ = static_cast<int>(Update.getError());
       DebugLog::printf("OTA: Update.begin failed error=%d\n", otaError_);
       Update.printError(Serial);
+      if (otaDisplayCallback_) {
+        otaDisplayCallback_(OtaDisplayEvent::Failure, otaFilename_.c_str(),
+                            otaBytesWritten_, otaError_);
+      }
     }
     return;
   }
@@ -1048,6 +1065,24 @@ void DeviceConfigService::handleOtaUpload() {
                        static_cast<unsigned>(written),
                        static_cast<unsigned>(upload.currentSize), otaError_);
       Update.printError(Serial);
+      if (otaDisplayCallback_) {
+        otaDisplayCallback_(OtaDisplayEvent::Failure, otaFilename_.c_str(),
+                            otaBytesWritten_, otaError_);
+      }
+      return;
+    }
+
+    // Flash writes may disturb the ESP32-S3 RGB DMA timing. Do not repaint on
+    // every small HTTP chunk; roughly every 64 KiB (or 400 ms) resynchronise
+    // the panel and refresh only the byte counter on the minimal OTA screen.
+    const uint32_t now = millis();
+    if (otaDisplayCallback_ &&
+        ((otaBytesWritten_ - otaLastDisplayBytes_) >= 64U * 1024U ||
+         static_cast<uint32_t>(now - otaLastDisplayMs_) >= 400U)) {
+      otaLastDisplayBytes_ = otaBytesWritten_;
+      otaLastDisplayMs_ = now;
+      otaDisplayCallback_(OtaDisplayEvent::Progress, otaFilename_.c_str(),
+                          otaBytesWritten_, 0);
     }
     return;
   }
@@ -1058,15 +1093,26 @@ void DeviceConfigService::handleOtaUpload() {
         otaSucceeded_ = true;
         DebugLog::printf("OTA: complete, %u bytes written\n",
                          static_cast<unsigned>(otaBytesWritten_));
+        if (otaDisplayCallback_) {
+          otaDisplayCallback_(OtaDisplayEvent::Success, otaFilename_.c_str(),
+                              otaBytesWritten_, 0);
+        }
       } else {
         otaError_ = static_cast<int>(Update.getError());
         DebugLog::printf("OTA: finalize failed error=%d\n", otaError_);
         Update.printError(Serial);
+        if (otaDisplayCallback_) {
+          otaDisplayCallback_(OtaDisplayEvent::Failure, otaFilename_.c_str(),
+                              otaBytesWritten_, otaError_);
+        }
       }
     } else {
       Update.abort();
     }
-    otaInProgress_ = false;
+
+    // Keep otaInProgress_ asserted until the normal POST result handler has
+    // sent the browser response. The main loop therefore cannot resume map
+    // rendering in the short gap between the last upload chunk and result.
     return;
   }
 
@@ -1076,6 +1122,10 @@ void DeviceConfigService::handleOtaUpload() {
     otaSucceeded_ = false;
     otaInProgress_ = false;
     DebugLog::println("OTA: upload aborted");
+    if (otaDisplayCallback_) {
+      otaDisplayCallback_(OtaDisplayEvent::Failure, otaFilename_.c_str(),
+                          otaBytesWritten_, otaError_);
+    }
   }
 }
 
