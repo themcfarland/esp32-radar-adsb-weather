@@ -7,7 +7,6 @@
 #include "config.h"
 #include "map_viewport.h"
 
-class RadarService;
 
 class LightningService {
  public:
@@ -16,23 +15,16 @@ class LightningService {
 
   bool begin();
 
-  // Keep the lightning timeline anchored to the six CHMI radar timestamps.
-  // A historical frame renders only strikes from its own five-minute slot.
-  // The newest frame additionally renders a short realtime overlay.
-  // Blitzortung itself is realtime-only; history fills progressively after boot.
-  bool updateForRadar(const RadarService& radar);
-
   // Must be called frequently from Arduino loop(). Returns true when a newly
   // received strike affects the visible map and a redraw is useful.
   bool loop(bool enabled);
 
-  bool renderFrame(uint8_t frameIndex, uint16_t* destination,
-                   uint16_t width, uint16_t height,
-                   const MapViewport& viewport) const;
+  // Draw the current realtime lightning trail independently of the CHMI
+  // radar animation. Colours are based only on strike age versus current time.
+  bool renderLive(uint16_t* destination, uint16_t width, uint16_t height,
+                  const MapViewport& viewport) const;
 
   bool ready() const;
-  bool frameReady(uint8_t index) const;
-  uint8_t frameCount() const { return frameCount_; }
   size_t strikeCount() const { return strikeCount_; }
   bool connected() const { return connected_; }
   const char* status() const { return status_; }
@@ -53,7 +45,6 @@ class LightningService {
   static constexpr size_t kMaxStrikes = 4096;
   static constexpr uint16_t kLzwDictionarySize = 16384;
   static constexpr uint32_t kHistorySeconds =
-      Config::RADAR_FRAME_COUNT * Config::RADAR_STEP_SECONDS +
       Config::LIGHTNING_TRAIL_RED_MAX_AGE_SEC + 120;
 
   void connectCurrentServer();
@@ -87,15 +78,13 @@ class LightningService {
   uint8_t* lzwFirst_ = nullptr;
   uint8_t* lzwStack_ = nullptr;
 
-  time_t radarFrameTimes_[Config::RADAR_FRAME_COUNT] = {};
-  uint8_t frameCount_ = 0;
-
   bool socketStarted_ = false;
   bool connected_ = false;
   bool dataChanged_ = false;
   uint8_t serverIndex_ = 0;
   uint32_t reconnectAtMs_ = 0;
   uint32_t lastSuccessMs_ = 0;
+  uint32_t lastAgeRedrawMs_ = 0;
   uint32_t decodedMessages_ = 0;
   uint32_t rejectedMessages_ = 0;
   char status_[128] = "Blesky: Blitzortung ceka";

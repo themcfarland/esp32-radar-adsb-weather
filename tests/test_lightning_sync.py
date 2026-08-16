@@ -1,27 +1,26 @@
 #!/usr/bin/env python3
-from datetime import datetime, timezone, timedelta
+# Regression test kept under the historical filename. Lightning must now be
+# independent from the animated radar timestamp; only real strike age matters.
 
-STEP = timedelta(minutes=5)
+TRAIL = 20 * 60
 
 
-def in_frame_slot(strike: datetime, radar_end: datetime) -> bool:
-    return radar_end - STEP < strike <= radar_end
+def visible(strike_epoch: int, now_epoch: int) -> bool:
+    if strike_epoch > now_epoch + 5:
+        return False
+    return now_epoch - strike_epoch <= TRAIL
 
-radar_end = datetime(2026, 8, 15, 15, 0, tzinfo=timezone.utc)
-assert in_frame_slot(datetime(2026, 8, 15, 15, 0, 0, tzinfo=timezone.utc), radar_end)
-assert in_frame_slot(datetime(2026, 8, 15, 14, 55, 1, tzinfo=timezone.utc), radar_end)
-assert not in_frame_slot(datetime(2026, 8, 15, 14, 55, 0, tzinfo=timezone.utc), radar_end)
-assert not in_frame_slot(datetime(2026, 8, 15, 14, 54, 59, tzinfo=timezone.utc), radar_end)
-assert not in_frame_slot(datetime(2026, 8, 15, 15, 0, 1, tzinfo=timezone.utc), radar_end)
+now = 1_786_808_500
+fresh = now - 30
+old = now - TRAIL - 1
 
-# Adjacent radar frames must not display the same strike.
-next_radar_end = radar_end + STEP
-strike = radar_end
-assert in_frame_slot(strike, radar_end)
-assert not in_frame_slot(strike, next_radar_end)
+# The radar frame index has no effect at all.
+for radar_frame in range(6):
+    assert visible(fresh, now), radar_frame
+    assert not visible(old, now), radar_frame
 
-# The sample nanosecond timestamp format converts to normal Unix seconds.
+# Blitzortung nanosecond timestamp still converts to normal Unix seconds.
 time_ns = 1786808428328945400
 assert time_ns // 1_000_000_000 == 1786808428
 
-print("LIGHTNING SYNC TEST OK: each strike belongs to one 5-minute radar frame")
+print("LIGHTNING LIVE TEST OK: visibility is independent of radar frames")

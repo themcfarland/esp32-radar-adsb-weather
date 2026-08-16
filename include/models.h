@@ -141,7 +141,7 @@ struct RuntimeDiagnostics {
   uint32_t lastMapRedrawDurationMs = 0;
   uint8_t radarFrameCount = 0;
   uint8_t currentRadarFrame = 0;
-  uint8_t lightningFrameCount = 0;
+  size_t lightningStrikeCount = 0;
   uint8_t forecastSlotCount = 0;
   size_t aircraftCount = 0;
   bool radarCacheReady = false;

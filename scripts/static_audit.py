@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Focused static audit for v0.28.11 frame-synchronised Blitzortung + robust OTA reboot/blackout."""
+"""Focused static audit for v0.28.12 independent realtime Blitzortung + robust OTA reboot/blackout."""
 from pathlib import Path
 import re
 import sys
@@ -42,8 +42,8 @@ ui_cpp = read("src/ui.cpp")
 patch = read("scripts/patch_display_driver.py")
 readme = read("README.md")
 
-require("0.28.11-lightning-frame-sync" in version,
-        "firmware version is not v0.28.11-lightning-frame-sync")
+require("0.28.12-lightning-live-independent" in version,
+        "firmware version is not v0.28.12-lightning-live-independent")
 require("showOtaScreen" in ui_cpp and "finishOtaScreen" in ui_cpp,
         "minimal OTA LCD screen is missing")
 progress_start = main.find("case OtaDisplayEvent::Progress:")
@@ -95,11 +95,14 @@ require("LIGHTNING_TRAIL_WHITE_MAX_AGE_SEC = 2UL * 60UL" in config and
         "for (int band = 3; band >= 0; --band)" in lightning_cpp and
         "Config::LIGHTNING_TRAIL_RED_MAX_AGE_SEC + 120" in lightning_h,
         "20-minute colour-coded lightning trail is missing or history is too short")
-require("LIGHTNING_REALTIME_OVERLAY_MAX_AGE_SEC = 5UL * 60UL" in config and
-        "strike.epochSec > frameStart && strike.epochSec <= frameEnd" in lightning_cpp and
-        "strike.epochSec > newestRadarEnd" in lightning_cpp and
-        "inRealtimeOverlay" in lightning_cpp,
-        "five-minute frame slot / realtime lightning synchronization is missing")
+require("LIGHTNING_REDRAW_MS = 30UL * 1000UL" in config and
+        "renderLive" in lightning_h and
+        "LightningService::renderLive" in lightning_cpp and
+        "const uint32_t ageSec = nowEpoch - strike.epochSec" in lightning_cpp and
+        "radarFrameTimes_" not in lightning_h and
+        "updateForRadar" not in lightning_cpp and
+        "lightning.renderLive" in main,
+        "independent realtime lightning rendering is missing")
 require("drawGeographicCircle" in map_cpp and
         "LIGHTNING_ALERT_RADIUS_KM" in map_cpp and
         "lightningProximityAlert" in map_h,
@@ -333,24 +336,22 @@ require("lightning_status" in device_cpp and
         "lightning web diagnostics are incomplete")
 require("lastLightningUpdateMs" in models and
         "lightningReady" in models and
-        "lightningFrameCount" in models and
+        "lightningStrikeCount" in models and
         "lightningStatus" in models,
         "lightning runtime diagnostics model is incomplete")
-require("frameTimeUtc" in radar_h and "frameTimeUtc" in radar_cpp,
-        "radar frame timestamps are not exposed for lightning sync")
-require("updateForRadar" in lightning_h and
-        "renderFrame" in lightning_h and
-        "renderFrame" in lightning_cpp and
-        "strike.epochSec > frameStart && strike.epochSec <= frameEnd" in lightning_cpp and
-        "newestRadarEnd - strike.epochSec" in lightning_cpp and
-        "LIGHTNING_TRAIL_RED_MAX_AGE_SEC" in lightning_cpp,
-        "synchronized Blitzortung lightning frame-slot path is incomplete")
+require("renderLive" in lightning_h and
+        "renderLive" in lightning_cpp and
+        "const uint32_t ageSec = nowEpoch - strike.epochSec" in lightning_cpp and
+        "LIGHTNING_TRAIL_RED_MAX_AGE_SEC" in lightning_cpp and
+        "updateForRadar" not in lightning_h and
+        "radarFrameTimes_" not in lightning_h,
+        "independent Blitzortung realtime render path is incomplete")
 require("lightning.begin()" in main and
-        "lightning.updateForRadar(radar)" in main and
         "lightning.loop(" in main and
-        "lightning.renderFrame" in main and
-        "(radarLayerEnabled || lightningLayerEnabled)" in main,
-        "lightning animation is not coupled to the radar timeline")
+        "lightning.renderLive" in main and
+        "lightning.updateForRadar(radar)" not in main and
+        "(radarLayerEnabled || lightningLayerEnabled)" not in main,
+        "lightning layer is still coupled to the radar timeline")
 require("lightningLayerEnabled" in map_h and
         "lightningLayerEnabled" in map_cpp and
         "BLESKY" in map_cpp,
@@ -477,5 +478,5 @@ print("Zambretti: A-Z codes, season and optional WU wind correction")
 print("Diagnostics: barometer, Zambretti and lightning status exposed on web")
 print("Display: conservative 20-line buffer, no periodic DMA watchdog")
 print("Radar: runtime PNG update remains RAM-only")
-print("Lightning: Blitzortung realtime WSS, 5 min radar slots + live newest-frame overlay")
+print("Lightning: Blitzortung realtime WSS, independent 20 min live overlay")
 print("OTA: browser firmware upload to dual OTA app partitions")

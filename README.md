@@ -1,17 +1,15 @@
 # Waveshare 7" Radar ČR + ADS-B + počasí
 
-Current firmware: **0.28.11-lightning-frame-sync**. Blitzortung strikes are assigned to one matching **5-minute CHMI radar slot**, so the same strike is no longer accumulated across consecutive animation frames. The newest radar frame additionally shows Blitzortung strikes from the **last 5 minutes in realtime**.
+Current firmware: **0.28.12-lightning-live-independent**. Blitzortung is now rendered as an **independent realtime map layer**, just like ADS-B. CHMI radar frames animate underneath it, while lightning remains at its true `lat/lon` position and changes colour only according to real strike age.
 
+## Nezavisla realtime vrstva blesku ve verzi 0.28.12
 
-
-
-## Synchronizace blesku ve verzi 0.28.11
-
-- Kazdy historicky blesk se vykresli pouze v jednom radarovem intervalu `(frame - 5 min, frame]`.
-- Tim se odstranuje opticke hromadeni stejnych blesku do svisle/stacionarni linie pri animaci.
-- Barevne stari se pro historicke sloty pocita vuci nejnovejsimu CHMI radarovemu snimku, takze zustava zachovana bila/zluta/oranzova/cervena legenda.
-- Na nejnovejsim radarovem snimku se navic okamzite zobrazi realtime Blitzortung blesky novejsi nez posledni radarovy snimek, maximalne vsak z poslednich 5 minut.
-- OTA blackout/restart z verze 0.28.9 a nova cik-cak ikona blesku zustavaji beze zmeny.
+- Blesky uz nejsou prirazovany k `radarFrame` ani k petiminutovym CHMI slotum.
+- Radar muze animovat vsech 6 historickych snimku, ale Blitzortung vrstva zustava stejna a zije podle aktualniho casu.
+- Novy blesk se zobrazi ihned po prijeti WebSocket zpravy.
+- Barevny trail: 0-2 min bila, 2-5 min zluta, 5-10 min oranzova, 10-20 min cervena; starsi blesky zmizi.
+- Pri pozastavenem radaru se bleskova vrstva sama prekresli kazdych 30 s, aby se barvy a expirace daly aktualizovaly.
+- 10km varovny kruh a stabilni OTA blackout/restart zustavaji beze zmeny.
 
 ## Ikona blesku ve verzi 0.28.10
 
@@ -39,7 +37,7 @@ Před finalizací se navíc porovná počet přijatých bajtů s velikostí soub
 Firmware pro původní desku **Waveshare ESP32-S3-Touch-LCD-7**
 (800 × 480, ST7262, GT911, CH422G, 8 MB OPI PSRAM).
 
-Aktuální verze: **0.28.11-lightning-frame-sync**
+Aktuální verze: **0.28.12-lightning-live-independent**
 
 > Projekt není určen pro varianty 7B/7C bez úpravy ovladače displeje.
 
@@ -47,7 +45,7 @@ Aktuální verze: **0.28.11-lightning-frame-sync**
 
 Mapa obsahuje volitelnou vrstvu **Blesky Blitzortung**. Firmware se pripojuje pres zabezpeceny WebSocket na `ws7.blitzortung.org` a pri vypadku zkusi `ws1` a `ws8`. Po spojeni odesle odber `{"a":111}`. Prichozi textove ramce jsou LZW komprimovane; firmware dekoduje pouze zacatek zpravy s poli `time`, `lat` a `lon`, pole `sig` se kvuli pameti neparsuje.
 
-Blesky z okoli CR se ukladaji do kruhoveho PSRAM bufferu. Pri vykresleni se kazdy blesk zaradi do intervalu `(cas_radaru - 5 min, cas_radaru]`, takze tlacitko pauzy i sestikrokova animace zustavaji spolecne s CHMI radarem. Po startu se historie plni postupne, protoze WebSocket dodava realtime data a neposila zpetne stare blesky.
+Blesky z okoli CR se ukladaji do kruhoveho PSRAM bufferu. Pri vykresleni jsou nezavisle na CHMI radarove animaci: jejich poloha je dana pouze `lat/lon` a barva skutecnym starim vuci aktualnimu casu. Radarove tlacitko pauzy tedy meni jen radar; realtime blesky dale prichazeji a starnou. Po startu se historie plni postupne, protoze WebSocket dodava realtime data a neposila zpetne stare blesky.
 
 Navic bezi nezavisle realtime varovani pro domaci pozici `49.7863 N, 13.2850 E`. Pokud byl v poslednich 10 minutach prijat alespon jeden blesk do vzdalenosti 10 km, kolem domaci znacky se vykresli cerveny geograficky kruh s realnym polomerem 10 km. Vzdalenost blesku se pocita po povrchu Zeme (Haversine), takze podminka neni zavisla na zoomu ani na pixelove velikosti mapy. Varovny kruh je nezavisly na prave zobrazenem historickem radarovem snimku a sam zmizi po vyprseni desetiminutoveho okna.
 

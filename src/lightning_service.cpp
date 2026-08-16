@@ -6,7 +6,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "radar_service.h"
 
 namespace {
 constexpr const char* kServers[] = {
@@ -86,31 +85,6 @@ bool LightningService::begin() {
   return true;
 }
 
-bool LightningService::updateForRadar(const RadarService& radar) {
-  uint8_t desired = radar.frameCount();
-  if (desired > Config::RADAR_FRAME_COUNT) desired = Config::RADAR_FRAME_COUNT;
-  bool changed = desired != frameCount_;
-
-  for (uint8_t i = 0; i < desired; ++i) {
-    time_t timestamp = 0;
-    if (!radar.frameTimeUtc(i, timestamp)) continue;
-    if (radarFrameTimes_[i] != timestamp) changed = true;
-    radarFrameTimes_[i] = timestamp;
-  }
-  for (uint8_t i = desired; i < Config::RADAR_FRAME_COUNT; ++i) {
-    radarFrameTimes_[i] = 0;
-  }
-  frameCount_ = desired;
-
-  if (!connected_) {
-    snprintf(status_, sizeof(status_),
-             "Blesky: Blitzortung casova osa %u/%u, ceka na WSS",
-             static_cast<unsigned>(frameCount_),
-             static_cast<unsigned>(radar.frameCount()));
-  }
-  return changed;
-}
-
 void LightningService::connectCurrentServer() {
   if (WiFi.status() != WL_CONNECTED || socketStarted_) return;
   const char* host = kServers[serverIndex_ % kServerCount];
@@ -146,6 +120,15 @@ bool LightningService::loop(bool enabled) {
 
   const time_t now = time(nullptr);
   if (now > 1700000000) pruneOldStrikes(static_cast<uint32_t>(now));
+
+  // Even with a paused radar and no newly received local strike, refresh the
+  // map periodically so white/yellow/orange/red age bands advance and strikes
+  // disappear after 20 minutes. This is independent of radarFrame.
+  if (strikeCount_ > 0 &&
+      millis() - lastAgeRedrawMs_ >= Config::LIGHTNING_REDRAW_MS) {
+    lastAgeRedrawMs_ = millis();
+    dataChanged_ = true;
+  }
   return dataChanged_;
 }
 
@@ -465,11 +448,7 @@ bool LightningService::recentStrikeWithin(float centerLat, float centerLon,
 }
 
 bool LightningService::ready() const {
-  return strikes_ != nullptr && frameCount_ > 0;
-}
-
-bool LightningService::frameReady(uint8_t index) const {
-  return ready() && index < frameCount_ && radarFrameTimes_[index] > 0;
+  return strikes_ != nullptr;
 }
 
 int LightningService::mapX(float lon, uint16_t width,
@@ -587,73 +566,26 @@ uint16_t LightningService::trailColorForAge(uint32_t ageSec) const {
   return 0;
 }
 
-bool LightningService::renderFrame(uint8_t frameIndex, uint16_t* destination,
-                                   uint16_t width, uint16_t height,
-                                   const MapViewport& viewport) const {
-  if (!destination || !frameReady(frameIndex) || !strikes_) return false;
-
-  const time_t frameEndTime = radarFrameTimes_[frameIndex];
-  if (frameEndTime <= 0) return false;
-  const uint32_t frameEnd = static_cast<uint32_t>(frameEndTime);
-  const uint32_t frameStart =
-      frameEnd > Config::RADAR_STEP_SECONDS
-          ? frameEnd - Config::RADAR_STEP_SECONDS
-          : 0U;
-
-  const uint8_t latestFrameIndex = frameCount_ > 0 ? frameCount_ - 1U : 0U;
-  const bool latestFrame = frameIndex == latestFrameIndex;
-  const uint32_t newestRadarEnd =
-      radarFrameTimes_[latestFrameIndex] > 0
-          ? static_cast<uint32_t>(radarFrameTimes_[latestFrameIndex])
-          : frameEnd;
+bool LightningService::renderLive(uint16_t* destination, uint16_t width,
+                                  uint16_t height,
+                                  const MapViewport& viewport) const {
+  if (!destination || !ready() || !strikes_) return false;
 
   const time_t nowTime = time(nullptr);
-  const bool clockValid = nowTime > 1700000000;
-  const uint32_t nowEpoch =
-      clockValid ? static_cast<uint32_t>(nowTime) : newestRadarEnd;
+  if (nowTime <= 1700000000) return false;
+  const uint32_t nowEpoch = static_cast<uint32_t>(nowTime);
 
   size_t rendered = 0;
 
-  // IMPORTANT: a historical strike belongs to exactly one five-minute radar
-  // slot: (frameEnd - 5 min, frameEnd]. This prevents the same strike from
-  // being redrawn in several consecutive frames, which previously produced a
-  // stationary vertical accumulation while the radar echo itself moved.
-  //
-  // On the newest radar frame only, strikes newer than the latest CHMI image
-  // are also accepted for a maximum of five minutes. They therefore appear on
-  // screen immediately after Blitzortung reports them, without creating a
-  // twenty-minute realtime accumulation on top of an older radar image.
+  // Independent realtime overlay: every strike is evaluated only against the
+  // real current time. Radar frame changes do not select, hide or recolour it.
+  // Older bands are rendered first so a newer strike wins where icons overlap.
   for (int band = 3; band >= 0; --band) {
     for (size_t i = 0; i < kMaxStrikes; ++i) {
       const Strike& strike = strikes_[i];
-      if (strike.epochSec == 0) continue;
+      if (strike.epochSec == 0 || strike.epochSec > nowEpoch + 5U) continue;
 
-      bool inRadarSlot =
-          strike.epochSec > frameStart && strike.epochSec <= frameEnd;
-      bool inRealtimeOverlay = false;
-
-      if (latestFrame && clockValid && strike.epochSec > newestRadarEnd &&
-          strike.epochSec <= nowEpoch + 5U) {
-        const uint32_t realtimeAge =
-            strike.epochSec <= nowEpoch ? nowEpoch - strike.epochSec : 0U;
-        inRealtimeOverlay =
-            realtimeAge <= Config::LIGHTNING_REALTIME_OVERLAY_MAX_AGE_SEC;
-      }
-
-      if (!inRadarSlot && !inRealtimeOverlay) continue;
-
-      uint32_t ageSec = 0;
-      if (inRealtimeOverlay) {
-        ageSec = strike.epochSec <= nowEpoch ? nowEpoch - strike.epochSec : 0U;
-      } else {
-        // Historical colour shows how old this slot is relative to the newest
-        // CHMI radar frame. This preserves the white/yellow/orange/red trail
-        // semantics without rendering the same geographic strike repeatedly.
-        ageSec = strike.epochSec <= newestRadarEnd
-                     ? newestRadarEnd - strike.epochSec
-                     : 0U;
-      }
-
+      const uint32_t ageSec = nowEpoch - strike.epochSec;
       if (ageSec > Config::LIGHTNING_TRAIL_RED_MAX_AGE_SEC) continue;
 
       int strikeBand = 0;

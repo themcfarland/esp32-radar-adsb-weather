@@ -463,7 +463,7 @@ void updateRuntimeDiagnostics() {
   runtimeDiagnostics.aircraftCount = aircraft.count;
   runtimeDiagnostics.radarCacheReady = radar.animationCacheReady();
   runtimeDiagnostics.lightningReady = lightning.ready();
-  runtimeDiagnostics.lightningFrameCount = lightning.frameCount();
+  runtimeDiagnostics.lightningStrikeCount = lightning.strikeCount();
   runtimeDiagnostics.currentWeatherValid = weatherData.current.valid;
   runtimeDiagnostics.weatherPressureHpa =
       weatherData.current.valid ? weatherData.current.pressureHpa : NAN;
@@ -630,12 +630,11 @@ void redrawMap() {
                                       Config::MAP_H, mapViewport);
   }
 
-  // Blitzortung historical strikes are restricted to the matching five-minute
-  // CHMI radar slot. The newest frame also receives a short realtime overlay,
-  // so fresh strikes appear immediately without accumulating across frames.
-  if (lightningLayerEnabled && lightning.frameReady(radarFrame)) {
-    lightning.renderFrame(radarFrame, buffer, Config::MAP_W, Config::MAP_H,
-                          mapViewport);
+  // Blitzortung is a realtime layer independent of the CHMI radar image, just
+  // like ADS-B. Radar animation may change underneath while the same lightning
+  // trail remains positioned by lat/lon and ages against the real clock.
+  if (lightningLayerEnabled && lightning.ready()) {
+    lightning.renderLive(buffer, Config::MAP_W, Config::MAP_H, mapViewport);
   }
 
   // The proximity warning is realtime and intentionally independent of the
@@ -736,10 +735,6 @@ void setup() {
   if (deviceConfig.stationConnected()) {
     Serial.println("Preloading CHMI radar files before LCD initialization...");
     radar.updateFrames();
-    if (lightningLayerEnabled) {
-      Serial.println("Synchronizing Blitzortung slots to CHMI radar times...");
-      lightning.updateForRadar(radar);
-    }
   }
   lastRadarUpdate = millis();
   lastLightningUpdate = lightning.lastSuccessMs();
@@ -908,10 +903,6 @@ void loop() {
         previousAdsbLayer != adsbLayerEnabled || alertDisplayChanged) {
       mapDirty = true;
     }
-    if (lightningLayerEnabled && !lightning.ready() &&
-        deviceConfig.stationConnected()) {
-      if (lightning.updateForRadar(radar)) mapDirty = true;
-    }
 
     // Saving web settings writes NVS while the RGB panel is active. Schedule
     // one recovery on the next VSYNC after the new settings are applied.
@@ -934,9 +925,6 @@ void loop() {
     const bool radarChanged = radar.updateFrames();
     if (radarChanged && !radar.animationCacheReady()) prepareRadarAnimation();
     lastRadarUpdate = now;
-    if (lightningLayerEnabled) {
-      lightning.updateForRadar(radar);
-    }
     radarFrame = 0;
     lastRadarAnimation = now;
     mapDirty = true;
@@ -963,9 +951,6 @@ void loop() {
     if (radar.updateFrames()) {
       if (!radar.animationCacheReady()) prepareRadarAnimation();
       displayResyncPending = true;
-    }
-    if (lightningLayerEnabled) {
-      lightning.updateForRadar(radar);
     }
     radarFrame = 0;
     lastCurrentWeatherUpdate = lastForecastUpdate = millis();
@@ -994,11 +979,6 @@ void loop() {
       displayResyncPending = true;
     }
 
-    // Only the five-minute slot boundaries are coupled to the radar refresh;
-    // strike reception itself is continuous over Blitzortung WebSocket.
-    if (lightningLayerEnabled && lightning.updateForRadar(radar)) {
-      mapDirty = true;
-    }
   }
 
   if (weatherConfigured() && deviceConfig.stationConnected() &&
@@ -1031,8 +1011,8 @@ void loop() {
     updateAstronomy();
   }
 
-  if (backlightOn && (radarLayerEnabled || lightningLayerEnabled) &&
-      !UI::radarPaused() && radar.frameCount() > 1 &&
+  if (backlightOn && radarLayerEnabled && !UI::radarPaused() &&
+      radar.frameCount() > 1 &&
       due(now, lastRadarAnimation, Config::RADAR_ANIMATION_MS)) {
     lastRadarAnimation = now;
     radarFrame = (radarFrame + 1) % radar.frameCount();

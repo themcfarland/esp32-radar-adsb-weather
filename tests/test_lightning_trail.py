@@ -19,9 +19,10 @@ assert "rgb565(255, 224, 0)" in source
 assert "rgb565(255, 128, 0)" in source
 assert "rgb565(255, 40, 40)" in source
 assert "for (int band = 3; band >= 0; --band)" in source
-assert "strike.epochSec > frameStart && strike.epochSec <= frameEnd" in source
-assert "LIGHTNING_REALTIME_OVERLAY_MAX_AGE_SEC" in source
-assert "strike.epochSec > newestRadarEnd" in source
+assert "const uint32_t ageSec = nowEpoch - strike.epochSec" in source
+assert "renderLive" in source
+assert "frameStart" not in source
+assert "newestRadarEnd" not in source
 
 # Boundary semantics used by the C++ implementation.
 def band(age):

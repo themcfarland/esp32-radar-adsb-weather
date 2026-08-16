@@ -1,3 +1,13 @@
+## 0.28.12 - Lightning live independent overlay
+
+- Decoupled Blitzortung rendering completely from CHMI `radarFrame` and five-minute radar timestamps.
+- Lightning is now drawn like ADS-B: the same realtime lat/lon overlay remains visible while historical radar images animate underneath.
+- Trail colour uses actual current strike age only: 0-2 min white, 2-5 min yellow, 5-10 min orange, 10-20 min red.
+- New strikes request an immediate map redraw; a 30 s age refresh keeps colours/expiry correct even with radar animation paused.
+- Radar animation no longer runs merely because the lightning layer is enabled.
+- Web diagnostics now show the number of buffered Blitzortung strikes instead of fictitious lightning frame counts.
+- 10 km proximity alert, smooth bolt icon and proven OTA blackout/reboot behavior are unchanged.
+
 ## 0.28.11 - Lightning frame sync + realtime latest frame
 
 - Blitzortung historical strikes are rendered only in their exact five-minute CHMI radar slot instead of being repeated for a 20-minute window in every frame.

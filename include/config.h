@@ -33,10 +33,9 @@ constexpr uint8_t RADAR_FRAME_COUNT = 6;
 constexpr uint8_t RADAR_LOOKBACK_STEPS = 48;  // 4 hours in five-minute steps.
 constexpr uint32_t RADAR_STEP_SECONDS = 5UL * 60UL;
 
-// Blitzortung realtime lightning arrives over WSS. Historical strikes are
-// rendered only in their matching five-minute CHMI radar slot. The newest
-// radar frame also receives a short realtime overlay so a fresh strike appears
-// immediately without accumulating a long stationary trail.
+// Blitzortung lightning is an independent realtime overlay, just like ADS-B.
+// Radar animation changes only the CHMI image; lightning positions and colours
+// are always evaluated against the real current time.
 // MAX_Z_masked visually matches the CHMI web radar: echoes unlikely to reach
 // the ground are shown with lighter, less saturated colours.
 constexpr char RADAR_BASE_URL[] =
@@ -48,14 +47,13 @@ constexpr char RADAR_INDEX_URL[] =
 constexpr float FALLBACK_LAT = 49.7863f;
 constexpr float FALLBACK_LON = 13.2850f;
 
-// Lightning colours are evaluated against the newest CHMI radar timestamp
-// for historical slots. The short live overlay uses real current time. This
-// keeps the colour trail while each strike belongs to only one radar frame.
+// Lightning trail colours are evaluated against real current time. The same
+// realtime lightning overlay remains visible while CHMI radar frames animate.
 constexpr uint32_t LIGHTNING_TRAIL_WHITE_MAX_AGE_SEC = 2UL * 60UL;
 constexpr uint32_t LIGHTNING_TRAIL_YELLOW_MAX_AGE_SEC = 5UL * 60UL;
 constexpr uint32_t LIGHTNING_TRAIL_ORANGE_MAX_AGE_SEC = 10UL * 60UL;
 constexpr uint32_t LIGHTNING_TRAIL_RED_MAX_AGE_SEC = 20UL * 60UL;
-constexpr uint32_t LIGHTNING_REALTIME_OVERLAY_MAX_AGE_SEC = 5UL * 60UL;
+constexpr uint32_t LIGHTNING_REDRAW_MS = 30UL * 1000UL;
 
 // Realtime lightning proximity warning around the home/station position.
 // A strike received in the last 10 minutes inside this 10 km radius makes
