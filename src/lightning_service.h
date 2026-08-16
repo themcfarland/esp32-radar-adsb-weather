@@ -16,7 +16,9 @@ class LightningService {
 
   bool begin();
 
-  // Keep the six lightning time slots identical to the CHMI radar timeline.
+  // Keep the lightning timeline anchored to the six CHMI radar timestamps.
+  // A historical frame renders only strikes from its own five-minute slot.
+  // The newest frame additionally renders a short realtime overlay.
   // Blitzortung itself is realtime-only; history fills progressively after boot.
   bool updateForRadar(const RadarService& radar);
 
@@ -51,7 +53,8 @@ class LightningService {
   static constexpr size_t kMaxStrikes = 4096;
   static constexpr uint16_t kLzwDictionarySize = 16384;
   static constexpr uint32_t kHistorySeconds =
-      Config::RADAR_FRAME_COUNT * Config::RADAR_STEP_SECONDS + 120;
+      Config::RADAR_FRAME_COUNT * Config::RADAR_STEP_SECONDS +
+      Config::LIGHTNING_TRAIL_RED_MAX_AGE_SEC + 120;
 
   void connectCurrentServer();
   void onWebSocketEvent(WStype_t type, uint8_t* payload, size_t length);
@@ -70,6 +73,7 @@ class LightningService {
   void pruneOldStrikes(uint32_t nowEpoch);
   void drawStrike(uint16_t* destination, uint16_t width, uint16_t height,
                   int x, int y, uint16_t color) const;
+  uint16_t trailColorForAge(uint32_t ageSec) const;
   int mapX(float lon, uint16_t width, const MapViewport& viewport) const;
   int mapY(float lat, uint16_t height, const MapViewport& viewport) const;
 

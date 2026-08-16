@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Focused static audit for v0.28.5 Blitzortung proximity alert + stable OTA screen."""
+"""Focused static audit for v0.28.11 frame-synchronised Blitzortung + robust OTA reboot/blackout."""
 from pathlib import Path
 import re
 import sys
@@ -42,15 +42,42 @@ ui_cpp = read("src/ui.cpp")
 patch = read("scripts/patch_display_driver.py")
 readme = read("README.md")
 
-require("0.28.5-ota-screen" in version,
-        "firmware version is not v0.28.5-ota-screen")
+require("0.28.11-lightning-frame-sync" in version,
+        "firmware version is not v0.28.11-lightning-frame-sync")
 require("showOtaScreen" in ui_cpp and "finishOtaScreen" in ui_cpp,
         "minimal OTA LCD screen is missing")
-require("OtaDisplayEvent::Progress" in main and
-        "esp_lcd_rgb_panel_restart" in main,
-        "OTA progress does not resynchronise RGB panel DMA")
-require("64U * 1024U" in device_cpp and "otaDisplayCallback_" in device_cpp,
-        "OTA display refresh throttling/callback is missing")
+progress_start = main.find("case OtaDisplayEvent::Progress:")
+progress_end = main.find("case OtaDisplayEvent::Success:", progress_start)
+progress_block = main[progress_start:progress_end]
+require(progress_start >= 0 and
+        "setOtaBacklightRaw(false)" in progress_block and
+        "lv_refr_now" not in progress_block and
+        "lvgl_port_lock" not in progress_block and
+        "esp_lcd_rgb_panel_restart" not in progress_block and
+        "UI::" not in progress_block,
+        "OTA progress callback must only blank the physical backlight")
+require('server_.hasArg("size")' in device_cpp and
+        "Update.begin(updateSize, U_FLASH)" in device_cpp and
+        "otaBytesWritten_ != otaExpectedBytes_" in device_cpp,
+        "OTA exact-size begin/final verification is missing")
+require("OTA: reboot armed after successful Update.end" in device_cpp and
+        "restartAt_ = millis() + 2200U" in device_cpp and
+        "OTA: success response, reboot in 1 s" in device_cpp,
+        "successful OTA does not arm an upload-end fallback reboot")
+require("otaDisplayFailurePending_" in device_h and
+        "Any OTA failure raised from the synchronous multipart callback" in device_cpp,
+        "OTA failure display is not deferred out of the multipart callback")
+require("setOtaBacklightRaw(false)" in main and
+        "DISPLEJ ZHASNE - NEVYPINEJTE" in ui_cpp and
+        "setTimeout(r,1100)" in device_cpp,
+        "OTA RGB blackout/preflight behaviour is missing")
+write_start = device_cpp.find("if (upload.status == UPLOAD_FILE_WRITE)")
+write_end = device_cpp.find("if (upload.status == UPLOAD_FILE_END)", write_start)
+write_block = device_cpp[write_start:write_end]
+require("otaDisplayCallback_" not in write_block and
+        "esp_lcd_rgb_panel_restart" not in write_block and
+        "lv_refr_now" not in write_block,
+        "OTA flash-write path must not perform display work")
 require('setBacklight(true, "OTA update")' in main,
         "OTA update does not force LCD backlight on")
 require("LIGHTNING_ALERT_RADIUS_KM = 10.0f" in config and
@@ -60,10 +87,26 @@ require("recentStrikeWithin" in lightning_h and
         "greatCircleDistanceKm" in lightning_cpp and
         "recentStrikeWithin(Config::FALLBACK_LAT, Config::FALLBACK_LON" in main,
         "realtime lightning proximity detection is missing")
+require("LIGHTNING_TRAIL_WHITE_MAX_AGE_SEC = 2UL * 60UL" in config and
+        "LIGHTNING_TRAIL_YELLOW_MAX_AGE_SEC = 5UL * 60UL" in config and
+        "LIGHTNING_TRAIL_ORANGE_MAX_AGE_SEC = 10UL * 60UL" in config and
+        "LIGHTNING_TRAIL_RED_MAX_AGE_SEC = 20UL * 60UL" in config and
+        "trailColorForAge" in lightning_h and
+        "for (int band = 3; band >= 0; --band)" in lightning_cpp and
+        "Config::LIGHTNING_TRAIL_RED_MAX_AGE_SEC + 120" in lightning_h,
+        "20-minute colour-coded lightning trail is missing or history is too short")
+require("LIGHTNING_REALTIME_OVERLAY_MAX_AGE_SEC = 5UL * 60UL" in config and
+        "strike.epochSec > frameStart && strike.epochSec <= frameEnd" in lightning_cpp and
+        "strike.epochSec > newestRadarEnd" in lightning_cpp and
+        "inRealtimeOverlay" in lightning_cpp,
+        "five-minute frame slot / realtime lightning synchronization is missing")
 require("drawGeographicCircle" in map_cpp and
         "LIGHTNING_ALERT_RADIUS_KM" in map_cpp and
         "lightningProximityAlert" in map_h,
         "geographic red 10 km lightning warning circle is missing")
+require("drawLightningTrailLegend" in map_cpp and
+        "0xFFFFFF, 0xFFE000, 0xFF8000, 0xFF2828" in map_cpp,
+        "lightning age legend is missing")
 require("qio_opi" in pio and "board_build.psram_type = opi" in pio,
         "8 MB OPI PSRAM configuration is missing")
 require("BOUNCE_LINES = 20" in patch and "strict=False" in patch,
@@ -247,7 +290,7 @@ require("otadata" in read("partitions.csv") and
 require("#include <Update.h>" in device_cpp and
         'server_.on("/update"' in device_cpp and
         "UPLOAD_FILE_START" in device_cpp and
-        "Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH)" in device_cpp and
+        "Update.begin(updateSize, U_FLASH)" in device_cpp and
         "Update.write" in device_cpp and "Update.end(true)" in device_cpp and
         "OTA aktualizace firmware" in device_cpp,
         "browser OTA update path is incomplete")
@@ -296,12 +339,12 @@ require("lastLightningUpdateMs" in models and
 require("frameTimeUtc" in radar_h and "frameTimeUtc" in radar_cpp,
         "radar frame timestamps are not exposed for lightning sync")
 require("updateForRadar" in lightning_h and
-        "Config::RADAR_STEP_SECONDS" in lightning_cpp and
         "renderFrame" in lightning_h and
         "renderFrame" in lightning_cpp and
-        "strike.epochSec <= start" in lightning_cpp and
-        "strike.epochSec > end" in lightning_cpp,
-        "synchronized Blitzortung five-minute animation path is incomplete")
+        "strike.epochSec > frameStart && strike.epochSec <= frameEnd" in lightning_cpp and
+        "newestRadarEnd - strike.epochSec" in lightning_cpp and
+        "LIGHTNING_TRAIL_RED_MAX_AGE_SEC" in lightning_cpp,
+        "synchronized Blitzortung lightning frame-slot path is incomplete")
 require("lightning.begin()" in main and
         "lightning.updateForRadar(radar)" in main and
         "lightning.loop(" in main and
@@ -434,5 +477,5 @@ print("Zambretti: A-Z codes, season and optional WU wind correction")
 print("Diagnostics: barometer, Zambretti and lightning status exposed on web")
 print("Display: conservative 20-line buffer, no periodic DMA watchdog")
 print("Radar: runtime PNG update remains RAM-only")
-print("Lightning: Blitzortung realtime WSS, LZW decode, six synchronized radar slots")
+print("Lightning: Blitzortung realtime WSS, 5 min radar slots + live newest-frame overlay")
 print("OTA: browser firmware upload to dual OTA app partitions")

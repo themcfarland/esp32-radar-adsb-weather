@@ -564,6 +564,24 @@ void drawLegend(lv_obj_t* canvas, uint16_t* buffer, uint16_t width,
            0xB8C8D2, &lv_font_montserrat_10);
 }
 
+void drawLightningTrailLegend(lv_obj_t* canvas, uint16_t* buffer,
+                              uint16_t width, uint16_t height) {
+  (void)height;
+  fillRect(buffer, width, height, 8, 46, 224, 32, color(0x071018));
+  drawText(canvas, 14, 50, 44, "BLESKY", 0xDCE8EF, &lv_font_montserrat_10);
+
+  constexpr uint32_t kTrailColors[] = {
+      0xFFFFFF, 0xFFE000, 0xFF8000, 0xFF2828};
+  constexpr const char* kTrailLabels[] = {
+      "0-2", "2-5", "5-10", "10-20"};
+  constexpr int kXs[] = {58, 98, 138, 184};
+  for (int i = 0; i < 4; ++i) {
+    fillRect(buffer, width, height, kXs[i], 50, 12, 8, color(kTrailColors[i]));
+    drawText(canvas, kXs[i] - 3, 62, i == 3 ? 42 : 34, kTrailLabels[i],
+             0xB8C8D2, &lv_font_montserrat_10);
+  }
+}
+
 void drawZoomBadge(lv_obj_t* canvas, uint16_t* buffer, uint16_t width,
                    uint16_t height, const MapViewport& viewport) {
   (void)height;
@@ -811,6 +829,9 @@ void drawReference(lv_obj_t* canvas, uint16_t* buffer, uint16_t width,
   }
   drawStation(buffer, width, height, viewport);
   if (radarLayerEnabled) drawLegend(canvas, buffer, width, height);
+  if (lightningLayerEnabled) {
+    drawLightningTrailLegend(canvas, buffer, width, height);
+  }
   drawZoomBadge(canvas, buffer, width, height, viewport);
 
   fillRect(buffer, width, height, 0, height - 22, width, 22, color(0x071018));

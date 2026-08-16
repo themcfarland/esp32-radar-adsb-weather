@@ -342,6 +342,7 @@ void DeviceConfigService::startWebServer() {
              [this]() { handleFactoryReset(); });
   server_.on("/reboot", HTTP_POST, [this]() { handleReboot(); });
   server_.on("/lcd-resync", HTTP_POST, [this]() { handleLcdResync(); });
+  server_.on("/ota-prepare", HTTP_POST, [this]() { handleOtaPrepare(); });
   server_.on("/update", HTTP_POST,
              [this]() { handleOtaResult(); },
              [this]() { handleOtaUpload(); });
@@ -378,6 +379,27 @@ void DeviceConfigService::loop() {
 
   if (portalActive_) dnsServer_.processNextRequest();
   if (serverStarted_) server_.handleClient();
+
+  // Any OTA failure raised from the synchronous multipart callback is shown
+  // only after WebServer::handleClient() has returned. This keeps every LVGL
+  // operation out of the flash-write path.
+  if (otaDisplayFailurePending_) {
+    otaDisplayFailurePending_ = false;
+    if (otaDisplayCallback_) {
+      otaDisplayCallback_(OtaDisplayEvent::Failure, otaFilename_.c_str(),
+                          otaBytesWritten_, otaError_);
+    }
+  }
+
+  // Render the OTA screen only after the lightweight preflight HTTP request
+  // has been answered. Never perform LVGL work from the multipart upload
+  // callback itself.
+  if (otaPrepareDisplayPending_) {
+    otaPrepareDisplayPending_ = false;
+    if (otaDisplayCallback_) {
+      otaDisplayCallback_(OtaDisplayEvent::Start, otaFilename_.c_str(), 0, 0);
+    }
+  }
 
   if (restartPending_ &&
       static_cast<int32_t>(millis() - restartAt_) >= 0) {
@@ -630,7 +652,7 @@ String DeviceConfigService::buildPage() const {
   page += F("<button type='submit'>Ulozit nastaveni</button></form>");
   page += F("<section class='card' style='margin-top:14px'><h2>OTA aktualizace firmware</h2><form id='ota_form' method='post' action='/update' enctype='multipart/form-data'><label for='firmware_file'>Firmware .bin</label><input id='firmware_file' type='file' name='firmware' accept='.bin,application/octet-stream' required><button id='ota_button' type='submit' style='margin-top:12px'>Nahrat firmware pres OTA</button><p id='ota_state' class='muted'>Nahraje se firmware.bin do neaktivni OTA partition. Po uspesnem overeni se zarizeni automaticky restartuje do nove verze. Nastaveni v NVS zustanou zachovana.</p></form></section>");
   page += F("<section class='card'><h2>Servis</h2><form method='post' action='/lcd-resync' style='display:inline'><button type='submit'>Srovnat LCD</button></form> <form method='post' action='/reboot' style='display:inline'><button type='submit'>Restart</button></form> <form method='post' action='/factory-reset' style='display:inline'><button type='submit' class='danger'>Smazat nastaveni</button></form><p class='muted'>Srovnani LCD se provede pouze rucne; firmware nespousti periodicky restart RGB DMA.</p></section>");
-  page += F("<script>const otaForm=document.getElementById('ota_form'),otaButton=document.getElementById('ota_button'),otaState=document.getElementById('ota_state');if(otaForm)otaForm.addEventListener('submit',()=>{otaButton.disabled=true;otaButton.textContent='Nahravam...';otaState.textContent='OTA zapisuje novy firmware. Nevypinejte zarizeni ani Wi-Fi.';});const s=document.getElementById('aircraft_now');document.querySelectorAll('.assign').forEach(b=>b.addEventListener('click',()=>{if(s.value)document.getElementById('alert_target_'+b.dataset.slot).value=s.value;}));let baroDiag=null;const calData=document.getElementById('baro_calibration_data');const calResult=document.getElementById('baro_calibration_result');async function loadBaroCalibration(){try{const r=await fetch('/api/diagnostics',{cache:'no-store'});if(!r.ok)throw Error(r.status);baroDiag=await r.json();if(!baroDiag.barometer_valid){calData.textContent='BMP180 zatim nema platne mereni';return;}const raw=baroDiag.barometer_raw_pressure_hpa;const temp=baroDiag.barometer_reduction_temperature_c;const wu=baroDiag.weather_pressure_hpa;calData.textContent='BMP180 '+raw.toFixed(1)+' hPa | T '+temp.toFixed(1)+' C | WU '+(wu===null?'--':wu.toFixed(1)+' hPa');if(wu!==null&&!document.getElementById('baro_reference').value)document.getElementById('baro_reference').value=wu.toFixed(1);}catch(e){calData.textContent='Diagnostika neni dostupna: '+e;}}document.getElementById('baro_use_wu').addEventListener('click',async()=>{if(!baroDiag)await loadBaroCalibration();if(!baroDiag||baroDiag.weather_pressure_hpa===null){calResult.textContent='WU neposkytuje platny referencni tlak.';return;}document.getElementById('baro_reference').value=baroDiag.weather_pressure_hpa.toFixed(1);calResult.textContent='Referencni tlak byl prevzat z aktualni WU observation.';});document.getElementById('baro_calculate').addEventListener('click',async()=>{if(!baroDiag)await loadBaroCalibration();if(!baroDiag||!baroDiag.barometer_valid){calResult.textContent='Nejprve je nutne platne mereni BMP180.';return;}const p=Number(baroDiag.barometer_raw_pressure_hpa),p0=Number(document.getElementById('baro_reference').value),t=Number(baroDiag.barometer_reduction_temperature_c);if(!Number.isFinite(p0)||p0<850||p0>1100||!Number.isFinite(p)||p<=0){calResult.textContent='Zadejte platny referencni tlak 850 az 1100 hPa.';return;}const h=((Math.pow(p0/p,1/5.257)-1)*(t+273.15))/0.0065;if(!Number.isFinite(h)||h<-500||h>5000){calResult.textContent='Z techto hodnot nelze vypocitat platnou vysku.';return;}document.getElementById('baro_altitude').value=h.toFixed(1);document.getElementById('baro_offset').value='0.0';calResult.textContent=p.toFixed(1)+' hPa -> '+p0.toFixed(1)+' hPa pri '+t.toFixed(1)+' C: navrzena vyska '+h.toFixed(1)+' m. Stisknete Ulozit nastaveni.';});loadBaroCalibration();</script></main></body></html>");
+  page += F("<script>const otaForm=document.getElementById('ota_form'),otaButton=document.getElementById('ota_button'),otaState=document.getElementById('ota_state'),otaFile=document.getElementById('firmware_file');if(otaForm)otaForm.addEventListener('submit',async(e)=>{e.preventDefault();const f=otaFile&&otaFile.files&&otaFile.files[0];if(!f)return;otaButton.disabled=true;otaButton.textContent='Pripravuji...';otaState.textContent='Pripravuji OTA obrazovku...';try{await fetch('/ota-prepare?name='+encodeURIComponent(f.name)+'&size='+encodeURIComponent(f.size),{method:'POST',cache:'no-store'});await new Promise(r=>setTimeout(r,1100));otaState.textContent='OTA zapisuje novy firmware. Displej muze byt behem zapisu zhasnuty. Nevypinejte zarizeni ani Wi-Fi.';otaButton.textContent='Nahravam...';otaForm.action='/update?size='+encodeURIComponent(f.size);otaForm.submit();}catch(err){otaButton.disabled=false;otaButton.textContent='Nahrat firmware';otaState.textContent='OTA priprava selhala: '+err;}});const s=document.getElementById('aircraft_now');document.querySelectorAll('.assign').forEach(b=>b.addEventListener('click',()=>{if(s.value)document.getElementById('alert_target_'+b.dataset.slot).value=s.value;}));let baroDiag=null;const calData=document.getElementById('baro_calibration_data');const calResult=document.getElementById('baro_calibration_result');async function loadBaroCalibration(){try{const r=await fetch('/api/diagnostics',{cache:'no-store'});if(!r.ok)throw Error(r.status);baroDiag=await r.json();if(!baroDiag.barometer_valid){calData.textContent='BMP180 zatim nema platne mereni';return;}const raw=baroDiag.barometer_raw_pressure_hpa;const temp=baroDiag.barometer_reduction_temperature_c;const wu=baroDiag.weather_pressure_hpa;calData.textContent='BMP180 '+raw.toFixed(1)+' hPa | T '+temp.toFixed(1)+' C | WU '+(wu===null?'--':wu.toFixed(1)+' hPa');if(wu!==null&&!document.getElementById('baro_reference').value)document.getElementById('baro_reference').value=wu.toFixed(1);}catch(e){calData.textContent='Diagnostika neni dostupna: '+e;}}document.getElementById('baro_use_wu').addEventListener('click',async()=>{if(!baroDiag)await loadBaroCalibration();if(!baroDiag||baroDiag.weather_pressure_hpa===null){calResult.textContent='WU neposkytuje platny referencni tlak.';return;}document.getElementById('baro_reference').value=baroDiag.weather_pressure_hpa.toFixed(1);calResult.textContent='Referencni tlak byl prevzat z aktualni WU observation.';});document.getElementById('baro_calculate').addEventListener('click',async()=>{if(!baroDiag)await loadBaroCalibration();if(!baroDiag||!baroDiag.barometer_valid){calResult.textContent='Nejprve je nutne platne mereni BMP180.';return;}const p=Number(baroDiag.barometer_raw_pressure_hpa),p0=Number(document.getElementById('baro_reference').value),t=Number(baroDiag.barometer_reduction_temperature_c);if(!Number.isFinite(p0)||p0<850||p0>1100||!Number.isFinite(p)||p<=0){calResult.textContent='Zadejte platny referencni tlak 850 az 1100 hPa.';return;}const h=((Math.pow(p0/p,1/5.257)-1)*(t+273.15))/0.0065;if(!Number.isFinite(h)||h<-500||h>5000){calResult.textContent='Z techto hodnot nelze vypocitat platnou vysku.';return;}document.getElementById('baro_altitude').value=h.toFixed(1);document.getElementById('baro_offset').value='0.0';calResult.textContent=p.toFixed(1)+' hPa -> '+p0.toFixed(1)+' hPa pri '+t.toFixed(1)+' C: navrzena vyska '+h.toFixed(1)+' m. Stisknete Ulozit nastaveni.';});loadBaroCalibration();</script></main></body></html>");
   return page;
 }
 
@@ -650,7 +672,7 @@ String DeviceConfigService::buildDiagnosticsPage() const {
   page += F("<section class='card wide'><h2>Datove zdroje</h2><table><tr><td>Radar</td><td id='radar_status' class='value'>--</td></tr><tr><td>Radarove snimky</td><td id='radar_frames'>--</td></tr><tr><td>Stari aktualizace radaru</td><td id='radar_age'>--</td></tr><tr><td>Blesky Blitzortung</td><td id='lightning_status' class='value'>--</td></tr><tr><td>Snimky blesku</td><td id='lightning_frames'>--</td></tr><tr><td>Stari aktualizace blesku</td><td id='lightning_age'>--</td></tr><tr><td>ADS-B</td><td id='adsb_status' class='value'>--</td></tr><tr><td>Pocet letounu</td><td id='aircraft_count'>--</td></tr><tr><td>Stari ADS-B dat</td><td id='adsb_age'>--</td></tr><tr><td>Aktualni pocasi</td><td id='weather_status' class='value'>--</td></tr><tr><td>Stari pocasi</td><td id='weather_age'>--</td></tr><tr><td>Predpoved</td><td id='forecast_status' class='value'>--</td></tr><tr><td>Stari predpovedi</td><td id='forecast_age'>--</td></tr><tr><td>Astronomie</td><td id='astronomy_status' class='value'>--</td></tr><tr><td>Stari astronomie</td><td id='astronomy_age'>--</td></tr></table></section>");
   page += F("<section class='card wide'><h2>Barometr a Zambretti</h2><table><tr><td>Povoleno</td><td id='barometer_enabled'>--</td></tr><tr><td>Senzor</td><td id='barometer_sensor' class='value'>--</td></tr><tr><td>Stav</td><td id='barometer_status' class='value'>--</td></tr><tr><td>Nastavena vyska / korekce</td><td id='barometer_calibration'>--</td></tr><tr><td>WU referencni tlak</td><td id='weather_pressure'>--</td></tr><tr><td>Tlak u hladiny more</td><td id='barometer_pressure'>--</td></tr><tr><td>Tlak senzoru</td><td id='barometer_raw_pressure'>--</td></tr><tr><td>Teplota senzoru</td><td id='barometer_temperature'>--</td></tr><tr><td>Teplota pro prepocet</td><td id='barometer_reduction_temperature'>--</td></tr><tr><td>Zdroj teploty</td><td id='barometer_reduction_source'>--</td></tr><tr><td>WU prumer / vzorky</td><td id='wu_temperature_average'>--</td></tr><tr><td>Stari posledni WU teploty</td><td id='wu_temperature_age'>--</td></tr><tr><td>Zmena za 3 h</td><td id='barometer_delta'>--</td></tr><tr><td>Trend tlaku</td><td id='barometer_trend'>--</td></tr><tr><td>Zambretti kod</td><td id='zambretti_code'>--</td></tr><tr><td>Zambretti trend</td><td id='zambretti_trend'>--</td></tr><tr><td>Zambretti predpoved</td><td id='barometer_forecast'>--</td></tr><tr><td>Korekce vetrem</td><td id='zambretti_wind'>--</td></tr><tr><td>Sezonni korekce</td><td id='zambretti_season'>--</td></tr><tr><td>Body historie</td><td id='barometer_history'>--</td></tr><tr><td>Stari mereni</td><td id='barometer_age'>--</td></tr></table></section>");
   page += F("<section class='card wide'><h2>Nastaveni zobrazeni</h2><table><tr><td>Vrstvy</td><td id='layers'>--</td></tr><tr><td>Zvyrazneni letounu</td><td id='alerts'>--</td></tr></table></section></div><p id='refresh_state' class='muted'>Nacitam...</p>");
-  page += F("<script>const $=id=>document.getElementById(id);const kb=v=>Math.round(v/1024)+' kB';const age=v=>v<0?'dosud neprovedeno':v<1000?v+' ms':v<60000?Math.round(v/1000)+' s':v<3600000?Math.round(v/60000)+' min':(v/3600000).toFixed(1)+' h';const up=v=>{let s=Math.floor(v/1000),d=Math.floor(s/86400);s%=86400;let h=Math.floor(s/3600);s%=3600;let m=Math.floor(s/60);return (d?d+' d ':'')+h+' h '+m+' min'};const yes=(v,a='ano',n='ne')=>v?'<span class=ok>'+a+'</span>':'<span class=warn>'+n+'</span>';async function loadData(){try{const r=await fetch('/api/diagnostics',{cache:'no-store'});if(!r.ok)throw Error(r.status);const d=await r.json();$('firmware').textContent=d.firmware;$('local_datetime').textContent=d.local_date+' '+d.local_time;$('timezone').textContent=d.timezone+' (automaticky CET/CEST)';$('time_sync').innerHTML=yes(d.time_synchronized,'synchronizovano','ceka na NTP');$('uptime').textContent=up(d.uptime_ms);$('cpu').textContent=d.cpu_mhz+' MHz / '+d.cpu_cores+' jadra';$('flash').textContent=kb(d.flash_bytes);$('reset_reason').textContent=d.reset_reason;$('heap_free').textContent=kb(d.heap_free);$('heap_min').textContent=kb(d.heap_min);$('heap_largest').textContent=kb(d.heap_largest);$('psram_free').textContent=kb(d.psram_free);$('psram_min').textContent=kb(d.psram_min);$('psram_largest').textContent=kb(d.psram_largest);$('network_mode').textContent=d.network_mode;$('ssid').textContent=d.ssid||'--';$('ip').textContent=d.ip;$('rssi').textContent=d.wifi_connected?d.rssi_dbm+' dBm':'--';$('hostname').textContent=d.hostname+'.local';$('portal').innerHTML=yes(d.portal_active,'aktivni','vypnuty');$('backlight_state').innerHTML=yes(d.backlight_on,'zapnuto','vypnuto');$('backlight_schedule').textContent=d.backlight_schedule_enabled?(d.backlight_window_active?'aktivni interval':'mimo aktivni interval'):'plan vypnut';$('backlight_wake').textContent=d.backlight_temporary_wake?Math.ceil(d.backlight_wake_remaining_ms/1000)+' s':'neaktivni';$('map_view').textContent=d.map_view;$('map_redraws').textContent=d.map_redraw_count;$('map_duration').textContent=d.last_map_redraw_ms+' ms';$('lcd_resyncs').textContent=d.lcd_resync_count;$('lcd_age').textContent=age(d.lcd_resync_age_ms);$('radar_status').textContent=d.radar_status;$('radar_frames').textContent=(d.radar_frame_count?(d.current_radar_frame+1)+' / '+d.radar_frame_count:'0 / 0')+' | cache '+(d.radar_cache_ready?'OK':'nepripravena');$('radar_age').textContent=age(d.radar_age_ms);$('lightning_status').textContent=d.lightning_status+' | '+(d.lightning_ready?'data OK':'bez dat');$('lightning_frames').textContent=d.lightning_frame_count+' / '+d.radar_frame_count+' | 5 min sloty radaru';$('lightning_age').textContent=age(d.lightning_age_ms);$('adsb_status').textContent=d.adsb_status;$('aircraft_count').textContent=d.aircraft_count;$('adsb_age').textContent=age(d.adsb_age_ms);$('weather_status').textContent=d.weather_status+' | data '+(d.current_weather_valid?'OK':'chybi');$('weather_age').textContent=age(d.weather_age_ms);$('forecast_status').textContent=d.forecast_product+' | '+d.forecast_slot_count+' karet | '+(d.forecast_valid?'OK':'chyba');$('forecast_age').textContent=age(d.forecast_age_ms);$('astronomy_status').textContent=d.astronomy_status+' | '+(d.astronomy_valid?'OK':'chyba');$('astronomy_age').textContent=age(d.astronomy_age_ms);$('barometer_enabled').innerHTML=yes(d.barometer_enabled,'zapnut','vypnut');$('barometer_sensor').textContent=d.barometer_sensor+(d.barometer_address?' | 0x'+d.barometer_address.toString(16).toUpperCase():'');$('barometer_status').textContent=d.barometer_status;$('barometer_calibration').textContent=d.barometer_altitude_m.toFixed(1)+' m / '+(d.barometer_offset_hpa>=0?'+':'')+d.barometer_offset_hpa.toFixed(1)+' hPa';$('weather_pressure').textContent=d.weather_pressure_hpa===null?'--':d.weather_pressure_hpa.toFixed(1)+' hPa';$('barometer_pressure').textContent=d.barometer_valid?d.barometer_pressure_hpa.toFixed(1)+' hPa':'--';$('barometer_raw_pressure').textContent=d.barometer_valid?d.barometer_raw_pressure_hpa.toFixed(1)+' hPa':'--';$('barometer_temperature').textContent=d.barometer_valid?d.barometer_temperature_c.toFixed(1)+' C':'--';$('barometer_reduction_temperature').textContent=d.barometer_reduction_temperature_c===null?'--':d.barometer_reduction_temperature_c.toFixed(1)+' C';$('barometer_reduction_source').textContent=d.barometer_reduction_temperature_source;$('wu_temperature_average').textContent=d.wu_temperature_average_c===null?'bez dat':d.wu_temperature_average_c.toFixed(1)+' C | '+d.wu_temperature_sample_count+' vzorku / '+d.wu_temperature_span_h.toFixed(1)+' h';$('wu_temperature_age').textContent=d.wu_temperature_latest_epoch?age(Math.max(0,Date.now()-d.wu_temperature_latest_epoch*1000)):'bez dat';$('barometer_delta').textContent=d.barometer_delta_3h_hpa===null?'sbira se':(d.barometer_delta_3h_hpa>=0?'+':'')+d.barometer_delta_3h_hpa.toFixed(1)+' hPa';$('barometer_trend').textContent=d.barometer_trend+' | '+d.barometer_trend_hpa_h.toFixed(2)+' hPa/h';$('zambretti_code').textContent=d.zambretti_ready?d.zambretti_code:'sbira se 3h trend';$('zambretti_trend').textContent=d.zambretti_ready?d.zambretti_trend:'--';$('barometer_forecast').textContent=d.barometer_forecast;$('zambretti_wind').textContent=d.zambretti_wind_used?d.zambretti_wind_deg.toFixed(0)+' stupnu z WU':'bez smeru vetru';$('zambretti_season').textContent=d.zambretti_season_applied?'pouzita':'nepouzita';$('barometer_history').textContent=d.pressure_history_count+' / 289';$('barometer_age').textContent=age(d.barometer_age_ms);$('layers').textContent='Radar '+(d.radar_layer?'zapnut':'vypnut')+' | Blesky '+(d.lightning_layer?'zapnuty':'vypnuty')+' | ADS-B '+(d.adsb_layer?'zapnuto':'vypnuto');$('alerts').textContent=d.alert_enabled?d.alert_targets.filter(Boolean).join(' | '):'vypnuto';$('refresh_state').textContent='Aktualizovano '+new Date().toLocaleTimeString();}catch(e){$('refresh_state').innerHTML='<span class=bad>Diagnostiku se nepodarilo nacist: '+e+'</span>';}}loadData();setInterval(loadData,5000);</script></main></body></html>");
+  page += F("<script>const $=id=>document.getElementById(id);const kb=v=>Math.round(v/1024)+' kB';const age=v=>v<0?'dosud neprovedeno':v<1000?v+' ms':v<60000?Math.round(v/1000)+' s':v<3600000?Math.round(v/60000)+' min':(v/3600000).toFixed(1)+' h';const up=v=>{let s=Math.floor(v/1000),d=Math.floor(s/86400);s%=86400;let h=Math.floor(s/3600);s%=3600;let m=Math.floor(s/60);return (d?d+' d ':'')+h+' h '+m+' min'};const yes=(v,a='ano',n='ne')=>v?'<span class=ok>'+a+'</span>':'<span class=warn>'+n+'</span>';async function loadData(){try{const r=await fetch('/api/diagnostics',{cache:'no-store'});if(!r.ok)throw Error(r.status);const d=await r.json();$('firmware').textContent=d.firmware;$('local_datetime').textContent=d.local_date+' '+d.local_time;$('timezone').textContent=d.timezone+' (automaticky CET/CEST)';$('time_sync').innerHTML=yes(d.time_synchronized,'synchronizovano','ceka na NTP');$('uptime').textContent=up(d.uptime_ms);$('cpu').textContent=d.cpu_mhz+' MHz / '+d.cpu_cores+' jadra';$('flash').textContent=kb(d.flash_bytes);$('reset_reason').textContent=d.reset_reason;$('heap_free').textContent=kb(d.heap_free);$('heap_min').textContent=kb(d.heap_min);$('heap_largest').textContent=kb(d.heap_largest);$('psram_free').textContent=kb(d.psram_free);$('psram_min').textContent=kb(d.psram_min);$('psram_largest').textContent=kb(d.psram_largest);$('network_mode').textContent=d.network_mode;$('ssid').textContent=d.ssid||'--';$('ip').textContent=d.ip;$('rssi').textContent=d.wifi_connected?d.rssi_dbm+' dBm':'--';$('hostname').textContent=d.hostname+'.local';$('portal').innerHTML=yes(d.portal_active,'aktivni','vypnuty');$('backlight_state').innerHTML=yes(d.backlight_on,'zapnuto','vypnuto');$('backlight_schedule').textContent=d.backlight_schedule_enabled?(d.backlight_window_active?'aktivni interval':'mimo aktivni interval'):'plan vypnut';$('backlight_wake').textContent=d.backlight_temporary_wake?Math.ceil(d.backlight_wake_remaining_ms/1000)+' s':'neaktivni';$('map_view').textContent=d.map_view;$('map_redraws').textContent=d.map_redraw_count;$('map_duration').textContent=d.last_map_redraw_ms+' ms';$('lcd_resyncs').textContent=d.lcd_resync_count;$('lcd_age').textContent=age(d.lcd_resync_age_ms);$('radar_status').textContent=d.radar_status;$('radar_frames').textContent=(d.radar_frame_count?(d.current_radar_frame+1)+' / '+d.radar_frame_count:'0 / 0')+' | cache '+(d.radar_cache_ready?'OK':'nepripravena');$('radar_age').textContent=age(d.radar_age_ms);$('lightning_status').textContent=d.lightning_status+' | '+(d.lightning_ready?'data OK':'bez dat');$('lightning_frames').textContent=d.lightning_frame_count+' / '+d.radar_frame_count+' | 20 min trail dle radaru';$('lightning_age').textContent=age(d.lightning_age_ms);$('adsb_status').textContent=d.adsb_status;$('aircraft_count').textContent=d.aircraft_count;$('adsb_age').textContent=age(d.adsb_age_ms);$('weather_status').textContent=d.weather_status+' | data '+(d.current_weather_valid?'OK':'chybi');$('weather_age').textContent=age(d.weather_age_ms);$('forecast_status').textContent=d.forecast_product+' | '+d.forecast_slot_count+' karet | '+(d.forecast_valid?'OK':'chyba');$('forecast_age').textContent=age(d.forecast_age_ms);$('astronomy_status').textContent=d.astronomy_status+' | '+(d.astronomy_valid?'OK':'chyba');$('astronomy_age').textContent=age(d.astronomy_age_ms);$('barometer_enabled').innerHTML=yes(d.barometer_enabled,'zapnut','vypnut');$('barometer_sensor').textContent=d.barometer_sensor+(d.barometer_address?' | 0x'+d.barometer_address.toString(16).toUpperCase():'');$('barometer_status').textContent=d.barometer_status;$('barometer_calibration').textContent=d.barometer_altitude_m.toFixed(1)+' m / '+(d.barometer_offset_hpa>=0?'+':'')+d.barometer_offset_hpa.toFixed(1)+' hPa';$('weather_pressure').textContent=d.weather_pressure_hpa===null?'--':d.weather_pressure_hpa.toFixed(1)+' hPa';$('barometer_pressure').textContent=d.barometer_valid?d.barometer_pressure_hpa.toFixed(1)+' hPa':'--';$('barometer_raw_pressure').textContent=d.barometer_valid?d.barometer_raw_pressure_hpa.toFixed(1)+' hPa':'--';$('barometer_temperature').textContent=d.barometer_valid?d.barometer_temperature_c.toFixed(1)+' C':'--';$('barometer_reduction_temperature').textContent=d.barometer_reduction_temperature_c===null?'--':d.barometer_reduction_temperature_c.toFixed(1)+' C';$('barometer_reduction_source').textContent=d.barometer_reduction_temperature_source;$('wu_temperature_average').textContent=d.wu_temperature_average_c===null?'bez dat':d.wu_temperature_average_c.toFixed(1)+' C | '+d.wu_temperature_sample_count+' vzorku / '+d.wu_temperature_span_h.toFixed(1)+' h';$('wu_temperature_age').textContent=d.wu_temperature_latest_epoch?age(Math.max(0,Date.now()-d.wu_temperature_latest_epoch*1000)):'bez dat';$('barometer_delta').textContent=d.barometer_delta_3h_hpa===null?'sbira se':(d.barometer_delta_3h_hpa>=0?'+':'')+d.barometer_delta_3h_hpa.toFixed(1)+' hPa';$('barometer_trend').textContent=d.barometer_trend+' | '+d.barometer_trend_hpa_h.toFixed(2)+' hPa/h';$('zambretti_code').textContent=d.zambretti_ready?d.zambretti_code:'sbira se 3h trend';$('zambretti_trend').textContent=d.zambretti_ready?d.zambretti_trend:'--';$('barometer_forecast').textContent=d.barometer_forecast;$('zambretti_wind').textContent=d.zambretti_wind_used?d.zambretti_wind_deg.toFixed(0)+' stupnu z WU':'bez smeru vetru';$('zambretti_season').textContent=d.zambretti_season_applied?'pouzita':'nepouzita';$('barometer_history').textContent=d.pressure_history_count+' / 289';$('barometer_age').textContent=age(d.barometer_age_ms);$('layers').textContent='Radar '+(d.radar_layer?'zapnut':'vypnut')+' | Blesky '+(d.lightning_layer?'zapnuty':'vypnuty')+' | ADS-B '+(d.adsb_layer?'zapnuto':'vypnuto');$('alerts').textContent=d.alert_enabled?d.alert_targets.filter(Boolean).join(' | '):'vypnuto';$('refresh_state').textContent='Aktualizovano '+new Date().toLocaleTimeString();}catch(e){$('refresh_state').innerHTML='<span class=bad>Diagnostiku se nepodarilo nacist: '+e+'</span>';}}loadData();setInterval(loadData,5000);</script></main></body></html>");
   return page;
 }
 
@@ -1013,6 +1035,30 @@ void DeviceConfigService::handleLcdResync() {
   server_.send(303, "text/plain", "LCD resync scheduled");
 }
 
+void DeviceConfigService::handleOtaPrepare() {
+  otaSucceeded_ = false;
+  otaError_ = 0;
+  otaBytesWritten_ = 0;
+  otaExpectedBytes_ = 0;
+  otaFilename_ = server_.hasArg("name") ? server_.arg("name") : String("firmware.bin");
+  if (server_.hasArg("size")) {
+    const long parsedSize = server_.arg("size").toInt();
+    if (parsedSize > 0) otaExpectedBytes_ = static_cast<uint32_t>(parsedSize);
+  }
+
+  DebugLog::printf("OTA: preflight %s, expected=%u B\n",
+                   otaFilename_.c_str(),
+                   static_cast<unsigned>(otaExpectedBytes_));
+
+  server_.sendHeader("Cache-Control", "no-store");
+  server_.sendHeader("Connection", "close");
+  server_.send(204, "text/plain", "");
+
+  // Defer all display work until after WebServer has completed this request.
+  // The browser waits briefly before starting the multipart firmware upload.
+  otaPrepareDisplayPending_ = true;
+}
+
 void DeviceConfigService::handleOtaUpload() {
   HTTPUpload& upload = server_.upload();
 
@@ -1022,33 +1068,39 @@ void DeviceConfigService::handleOtaUpload() {
     otaBytesWritten_ = 0;
     otaError_ = 0;
     otaFilename_ = upload.filename;
-    otaLastDisplayBytes_ = 0;
-    otaLastDisplayMs_ = millis();
-    DebugLog::printf("OTA: start %s\n", upload.filename.c_str());
-
-    // Draw the tiny OTA scene before the first flash erase/write. This gives
-    // the RGB panel a stable framebuffer instead of the large map scene.
-    if (otaDisplayCallback_) {
-      otaDisplayCallback_(OtaDisplayEvent::Start, otaFilename_.c_str(), 0, 0);
+    otaExpectedBytes_ = 0;
+    if (server_.hasArg("size")) {
+      const long parsedSize = server_.arg("size").toInt();
+      if (parsedSize > 0) otaExpectedBytes_ = static_cast<uint32_t>(parsedSize);
     }
+    DebugLog::printf("OTA: start %s, expected=%u B, free sketch=%u B\n",
+                     upload.filename.c_str(),
+                     static_cast<unsigned>(otaExpectedBytes_),
+                     static_cast<unsigned>(ESP.getFreeSketchSpace()));
 
     if (!upload.filename.endsWith(".bin")) {
       otaError_ = -10;
       DebugLog::println("OTA: rejected non-.bin file");
-      if (otaDisplayCallback_) {
-        otaDisplayCallback_(OtaDisplayEvent::Failure, otaFilename_.c_str(),
-                            otaBytesWritten_, otaError_);
-      }
+      otaDisplayFailurePending_ = true;
       return;
     }
 
-    if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH)) {
+    const size_t updateSize = otaExpectedBytes_ > 0
+                                  ? static_cast<size_t>(otaExpectedBytes_)
+                                  : UPDATE_SIZE_UNKNOWN;
+    DebugLog::printf("OTA: calling Update.begin(%u)\n",
+                     static_cast<unsigned>(updateSize));
+    if (!Update.begin(updateSize, U_FLASH)) {
       otaError_ = static_cast<int>(Update.getError());
       DebugLog::printf("OTA: Update.begin failed error=%d\n", otaError_);
       Update.printError(Serial);
+      otaDisplayFailurePending_ = true;
+    } else {
+      DebugLog::println("OTA: Update.begin OK, waiting for firmware chunks");
+      // Progress(0) performs no LVGL or RGB-panel DMA work. It only cancels
+      // the preflight timeout and blanks the physical backlight before writes.
       if (otaDisplayCallback_) {
-        otaDisplayCallback_(OtaDisplayEvent::Failure, otaFilename_.c_str(),
-                            otaBytesWritten_, otaError_);
+        otaDisplayCallback_(OtaDisplayEvent::Progress, otaFilename_.c_str(), 0, 0);
       }
     }
     return;
@@ -1056,6 +1108,12 @@ void DeviceConfigService::handleOtaUpload() {
 
   if (upload.status == UPLOAD_FILE_WRITE) {
     if (otaError_ != 0 || !otaInProgress_) return;
+    if (otaBytesWritten_ == 0) {
+      DebugLog::printf("OTA: first chunk %u B, uploadTotal=%u B\n",
+                       static_cast<unsigned>(upload.currentSize),
+                       static_cast<unsigned>(upload.totalSize));
+    }
+    const uint32_t beforeWrite = otaBytesWritten_;
     const size_t written = Update.write(upload.buf, upload.currentSize);
     otaBytesWritten_ += static_cast<uint32_t>(written);
     if (written != upload.currentSize) {
@@ -1065,46 +1123,53 @@ void DeviceConfigService::handleOtaUpload() {
                        static_cast<unsigned>(written),
                        static_cast<unsigned>(upload.currentSize), otaError_);
       Update.printError(Serial);
-      if (otaDisplayCallback_) {
-        otaDisplayCallback_(OtaDisplayEvent::Failure, otaFilename_.c_str(),
-                            otaBytesWritten_, otaError_);
-      }
+      // Do not touch the display from the synchronous WRITE callback, even
+      // on failure. The POST result handler will present the error after the
+      // multipart request has finished.
       return;
     }
 
-    // Flash writes may disturb the ESP32-S3 RGB DMA timing. Do not repaint on
-    // every small HTTP chunk; roughly every 64 KiB (or 400 ms) resynchronise
-    // the panel and refresh only the byte counter on the minimal OTA screen.
-    const uint32_t now = millis();
-    if (otaDisplayCallback_ &&
-        ((otaBytesWritten_ - otaLastDisplayBytes_) >= 64U * 1024U ||
-         static_cast<uint32_t>(now - otaLastDisplayMs_) >= 400U)) {
-      otaLastDisplayBytes_ = otaBytesWritten_;
-      otaLastDisplayMs_ = now;
-      otaDisplayCallback_(OtaDisplayEvent::Progress, otaFilename_.c_str(),
-                          otaBytesWritten_, 0);
+    if ((beforeWrite / (256U * 1024U)) !=
+        (otaBytesWritten_ / (256U * 1024U))) {
+      DebugLog::printf("OTA: written %u / %u B\n",
+                       static_cast<unsigned>(otaBytesWritten_),
+                       static_cast<unsigned>(otaExpectedBytes_));
     }
+
+    // IMPORTANT: do not touch LVGL or restart the RGB panel while flash is
+    // being erased/written. WebServer upload callbacks run synchronously.
     return;
   }
 
   if (upload.status == UPLOAD_FILE_END) {
+    if (otaError_ == 0 && otaExpectedBytes_ > 0 &&
+        otaBytesWritten_ != otaExpectedBytes_) {
+      otaError_ = -13;
+      DebugLog::printf("OTA: size mismatch expected=%u written=%u uploadTotal=%u\n",
+                       static_cast<unsigned>(otaExpectedBytes_),
+                       static_cast<unsigned>(otaBytesWritten_),
+                       static_cast<unsigned>(upload.totalSize));
+      Update.abort();
+    }
+
     if (otaError_ == 0) {
       if (Update.end(true)) {
         otaSucceeded_ = true;
-        DebugLog::printf("OTA: complete, %u bytes written\n",
-                         static_cast<unsigned>(otaBytesWritten_));
-        if (otaDisplayCallback_) {
-          otaDisplayCallback_(OtaDisplayEvent::Success, otaFilename_.c_str(),
-                              otaBytesWritten_, 0);
-        }
+        DebugLog::printf("OTA: complete, %u bytes written (expected %u)\n",
+                         static_cast<unsigned>(otaBytesWritten_),
+                         static_cast<unsigned>(otaExpectedBytes_));
+
+        // Arm reboot here, before the normal POST result handler. If the
+        // browser closes the connection after the final multipart chunk, the
+        // new firmware is still guaranteed to boot once handleClient returns.
+        restartPending_ = true;
+        restartAt_ = millis() + 2200U;
+        DebugLog::println("OTA: reboot armed after successful Update.end");
       } else {
         otaError_ = static_cast<int>(Update.getError());
         DebugLog::printf("OTA: finalize failed error=%d\n", otaError_);
         Update.printError(Serial);
-        if (otaDisplayCallback_) {
-          otaDisplayCallback_(OtaDisplayEvent::Failure, otaFilename_.c_str(),
-                              otaBytesWritten_, otaError_);
-        }
+        otaDisplayFailurePending_ = true;
       }
     } else {
       Update.abort();
@@ -1122,33 +1187,38 @@ void DeviceConfigService::handleOtaUpload() {
     otaSucceeded_ = false;
     otaInProgress_ = false;
     DebugLog::println("OTA: upload aborted");
-    if (otaDisplayCallback_) {
-      otaDisplayCallback_(OtaDisplayEvent::Failure, otaFilename_.c_str(),
-                          otaBytesWritten_, otaError_);
-    }
+    otaDisplayFailurePending_ = true;
   }
 }
 
 void DeviceConfigService::handleOtaResult() {
   otaInProgress_ = false;
   if (otaSucceeded_ && otaError_ == 0) {
+    // Update.end() has already armed a fallback reboot. Once the HTTP result
+    // handler is reached, shorten the delay so the browser has time to receive
+    // the success page but the device cannot remain on the old image.
+    restartPending_ = true;
+    restartAt_ = millis() + 1000U;
+    DebugLog::println("OTA: success response, reboot in 1 s");
+
     String page;
     page.reserve(900);
     page += F("<!doctype html><meta charset='utf-8'><meta name='viewport' content='width=device-width'><style>body{font-family:Arial;background:#07131c;color:white;padding:30px;max-width:700px;margin:auto}.ok{color:#6ee7a5}</style><h1 class='ok'>OTA aktualizace uspesna</h1><p>Nahrano ");
     page += String(otaBytesWritten_);
     page += F(" B. Zarizeni se restartuje do noveho firmware.</p><p>Po nekolika sekundach obnovte <code>http://radar-adsb.local/</code>.</p>");
     server_.sendHeader("Cache-Control", "no-store");
+    server_.sendHeader("Connection", "close");
     server_.send(200, "text/html; charset=utf-8", page);
-    restartPending_ = true;
-    restartAt_ = millis() + 1800;
     return;
   }
 
   String message = F("OTA aktualizace selhala. Kod chyby: ");
   message += String(otaError_);
   message += F(". Puvodni firmware zustava aktivni.");
-  DebugLog::printf("OTA: failed error=%d bytes=%u\n", otaError_,
-                   static_cast<unsigned>(otaBytesWritten_));
+  DebugLog::printf("OTA: failed error=%d bytes=%u expected=%u\n", otaError_,
+                   static_cast<unsigned>(otaBytesWritten_),
+                   static_cast<unsigned>(otaExpectedBytes_));
+  otaDisplayFailurePending_ = true;
   // Flash writes can temporarily disturb the RGB display DMA on ESP32-S3.
   // A failed OTA does not reboot, so force a clean LCD redraw afterwards.
   lcdResyncRequested_ = true;

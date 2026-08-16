@@ -567,16 +567,16 @@ void showOtaScreen(const char* filename, const char* versionText) {
   applyPanelStyle(panel, 0x0D202C, 14, 0x254C61, 2);
 
   gOtaStatus = makeLabel(panel, 30, 34, 500,
-                         "Nahravam novy firmware...",
+                         "OTA aktualizace pripravena",
                          &lv_font_montserrat_16, 0xDCE7ED,
                          LV_TEXT_ALIGN_CENTER);
 
-  gOtaBytes = makeLabel(panel, 30, 82, 500, "Nahrano: 0 kB",
+  gOtaBytes = makeLabel(panel, 30, 82, 500, "Zapis zacne za okamzik...",
                         &lv_font_montserrat_24, 0xFFD166,
                         LV_TEXT_ALIGN_CENTER);
 
   gOtaResult = makeLabel(panel, 30, 136, 500,
-                         "NEVYPINEJTE ZARIZENI",
+                         "DISPLEJ ZHASNE - NEVYPINEJTE",
                          &lv_font_montserrat_16, 0xFF8F70,
                          LV_TEXT_ALIGN_CENTER);
 

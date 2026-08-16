@@ -493,21 +493,98 @@ int LightningService::mapY(float lat, uint16_t height,
 void LightningService::drawStrike(uint16_t* destination, uint16_t width,
                                   uint16_t height, int x, int y,
                                   uint16_t color) const {
-  static constexpr int8_t bolt[][2] = {
-      {-1, -5}, {0, -5}, {-2, -3}, {-1, -3}, {0, -3}, {1, -3},
-      {-1, -2}, {0, -2}, {2, -2}, {1, -1}, {0, 0}, {1, 0},
-      {0, 1}, {-1, 2}, {0, 2}, {-2, 4}, {-1, 4}, {-2, 5}};
-  for (const auto& p : bolt) {
-    const int px = x + p[0];
-    const int py = y + p[1];
-    if (px >= 0 && py >= 0 && px < width && py < height) {
-      destination[static_cast<size_t>(py) * width + px] = color;
+  if (!destination || width == 0 || height == 0) return;
+
+  // Continuous zig-zag bolt. The previous icon was a sparse bitmap and its
+  // isolated pixels looked like small squares on the 7-inch panel. Here each
+  // segment is a connected line with a subtle antialiased halo and dark
+  // one-pixel shadow, while the centre line keeps the exact trail age colour.
+  auto blendPixel = [&](int px, int py, uint16_t source, uint8_t alpha) {
+    if (px < 0 || py < 0 || px >= static_cast<int>(width) ||
+        py >= static_cast<int>(height) || alpha == 0) {
+      return;
     }
+
+    const size_t index = static_cast<size_t>(py) * width + px;
+    if (alpha == 255) {
+      destination[index] = source;
+      return;
+    }
+
+    const uint16_t background = destination[index];
+    const uint32_t sr = (source >> 11) & 0x1FU;
+    const uint32_t sg = (source >> 5) & 0x3FU;
+    const uint32_t sb = source & 0x1FU;
+    const uint32_t br = (background >> 11) & 0x1FU;
+    const uint32_t bg = (background >> 5) & 0x3FU;
+    const uint32_t bb = background & 0x1FU;
+    const uint32_t inv = 255U - alpha;
+
+    const uint16_t rr = static_cast<uint16_t>((sr * alpha + br * inv + 127U) / 255U);
+    const uint16_t rg = static_cast<uint16_t>((sg * alpha + bg * inv + 127U) / 255U);
+    const uint16_t rb = static_cast<uint16_t>((sb * alpha + bb * inv + 127U) / 255U);
+    destination[index] = static_cast<uint16_t>((rr << 11) | (rg << 5) | rb);
+  };
+
+  auto drawSegment = [&](int x0, int y0, int x1, int y1, uint16_t c,
+                         uint8_t coreAlpha, uint8_t haloAlpha) {
+    const int dx = abs(x1 - x0);
+    const int sx = x0 < x1 ? 1 : -1;
+    const int dy = -abs(y1 - y0);
+    const int sy = y0 < y1 ? 1 : -1;
+    int err = dx + dy;
+
+    while (true) {
+      // Put the soft pixels perpendicular to the dominant line direction.
+      if (dx >= -dy) {
+        blendPixel(x0, y0 - 1, c, haloAlpha);
+        blendPixel(x0, y0 + 1, c, haloAlpha);
+      } else {
+        blendPixel(x0 - 1, y0, c, haloAlpha);
+        blendPixel(x0 + 1, y0, c, haloAlpha);
+      }
+      blendPixel(x0, y0, c, coreAlpha);
+
+      if (x0 == x1 && y0 == y1) break;
+      const int e2 = 2 * err;
+      if (e2 >= dy) {
+        err += dy;
+        x0 += sx;
+      }
+      if (e2 <= dx) {
+        err += dx;
+        y0 += sy;
+      }
+    }
+  };
+
+  auto drawBolt = [&](int ox, int oy, uint16_t c, uint8_t coreAlpha,
+                      uint8_t haloAlpha) {
+    // A compact 13 px tall lightning shape with a visible centre knee.
+    drawSegment(ox + 2, oy - 6, ox - 2, oy - 1, c, coreAlpha, haloAlpha);
+    drawSegment(ox - 2, oy - 1, ox + 1, oy - 1, c, coreAlpha, haloAlpha);
+    drawSegment(ox + 1, oy - 1, ox - 2, oy + 6, c, coreAlpha, haloAlpha);
+  };
+
+  const uint16_t shadow = rgb565(7, 11, 15);
+  drawBolt(x + 1, y + 1, shadow, 210, 55);
+  drawBolt(x, y, color, 255, 85);
+}
+
+uint16_t LightningService::trailColorForAge(uint32_t ageSec) const {
+  if (ageSec <= Config::LIGHTNING_TRAIL_WHITE_MAX_AGE_SEC) {
+    return rgb565(255, 255, 255);
   }
-  const uint16_t white = rgb565(255, 255, 255);
-  if (x >= 0 && y >= 0 && x < width && y < height) {
-    destination[static_cast<size_t>(y) * width + x] = white;
+  if (ageSec <= Config::LIGHTNING_TRAIL_YELLOW_MAX_AGE_SEC) {
+    return rgb565(255, 224, 0);
   }
+  if (ageSec <= Config::LIGHTNING_TRAIL_ORANGE_MAX_AGE_SEC) {
+    return rgb565(255, 128, 0);
+  }
+  if (ageSec <= Config::LIGHTNING_TRAIL_RED_MAX_AGE_SEC) {
+    return rgb565(255, 40, 40);
+  }
+  return 0;
 }
 
 bool LightningService::renderFrame(uint8_t frameIndex, uint16_t* destination,
@@ -515,24 +592,92 @@ bool LightningService::renderFrame(uint8_t frameIndex, uint16_t* destination,
                                    const MapViewport& viewport) const {
   if (!destination || !frameReady(frameIndex) || !strikes_) return false;
 
-  const time_t end = radarFrameTimes_[frameIndex];
-  const time_t start = end - static_cast<time_t>(Config::RADAR_STEP_SECONDS);
-  const uint16_t yellow = rgb565(255, 224, 0);
+  const time_t frameEndTime = radarFrameTimes_[frameIndex];
+  if (frameEndTime <= 0) return false;
+  const uint32_t frameEnd = static_cast<uint32_t>(frameEndTime);
+  const uint32_t frameStart =
+      frameEnd > Config::RADAR_STEP_SECONDS
+          ? frameEnd - Config::RADAR_STEP_SECONDS
+          : 0U;
+
+  const uint8_t latestFrameIndex = frameCount_ > 0 ? frameCount_ - 1U : 0U;
+  const bool latestFrame = frameIndex == latestFrameIndex;
+  const uint32_t newestRadarEnd =
+      radarFrameTimes_[latestFrameIndex] > 0
+          ? static_cast<uint32_t>(radarFrameTimes_[latestFrameIndex])
+          : frameEnd;
+
+  const time_t nowTime = time(nullptr);
+  const bool clockValid = nowTime > 1700000000;
+  const uint32_t nowEpoch =
+      clockValid ? static_cast<uint32_t>(nowTime) : newestRadarEnd;
+
   size_t rendered = 0;
 
-  for (size_t i = 0; i < kMaxStrikes; ++i) {
-    const Strike& strike = strikes_[i];
-    if (strike.epochSec == 0 || strike.epochSec <= start || strike.epochSec > end) {
-      continue;
+  // IMPORTANT: a historical strike belongs to exactly one five-minute radar
+  // slot: (frameEnd - 5 min, frameEnd]. This prevents the same strike from
+  // being redrawn in several consecutive frames, which previously produced a
+  // stationary vertical accumulation while the radar echo itself moved.
+  //
+  // On the newest radar frame only, strikes newer than the latest CHMI image
+  // are also accepted for a maximum of five minutes. They therefore appear on
+  // screen immediately after Blitzortung reports them, without creating a
+  // twenty-minute realtime accumulation on top of an older radar image.
+  for (int band = 3; band >= 0; --band) {
+    for (size_t i = 0; i < kMaxStrikes; ++i) {
+      const Strike& strike = strikes_[i];
+      if (strike.epochSec == 0) continue;
+
+      bool inRadarSlot =
+          strike.epochSec > frameStart && strike.epochSec <= frameEnd;
+      bool inRealtimeOverlay = false;
+
+      if (latestFrame && clockValid && strike.epochSec > newestRadarEnd &&
+          strike.epochSec <= nowEpoch + 5U) {
+        const uint32_t realtimeAge =
+            strike.epochSec <= nowEpoch ? nowEpoch - strike.epochSec : 0U;
+        inRealtimeOverlay =
+            realtimeAge <= Config::LIGHTNING_REALTIME_OVERLAY_MAX_AGE_SEC;
+      }
+
+      if (!inRadarSlot && !inRealtimeOverlay) continue;
+
+      uint32_t ageSec = 0;
+      if (inRealtimeOverlay) {
+        ageSec = strike.epochSec <= nowEpoch ? nowEpoch - strike.epochSec : 0U;
+      } else {
+        // Historical colour shows how old this slot is relative to the newest
+        // CHMI radar frame. This preserves the white/yellow/orange/red trail
+        // semantics without rendering the same geographic strike repeatedly.
+        ageSec = strike.epochSec <= newestRadarEnd
+                     ? newestRadarEnd - strike.epochSec
+                     : 0U;
+      }
+
+      if (ageSec > Config::LIGHTNING_TRAIL_RED_MAX_AGE_SEC) continue;
+
+      int strikeBand = 0;
+      if (ageSec > Config::LIGHTNING_TRAIL_ORANGE_MAX_AGE_SEC) {
+        strikeBand = 3;  // 10-20 min: red
+      } else if (ageSec > Config::LIGHTNING_TRAIL_YELLOW_MAX_AGE_SEC) {
+        strikeBand = 2;  // 5-10 min: orange
+      } else if (ageSec > Config::LIGHTNING_TRAIL_WHITE_MAX_AGE_SEC) {
+        strikeBand = 1;  // 2-5 min: yellow
+      }
+      if (strikeBand != band) continue;
+
+      if (strike.lon < viewport.lonLeft || strike.lon > viewport.lonRight ||
+          strike.lat < viewport.latBottom || strike.lat > viewport.latTop) {
+        continue;
+      }
+
+      const uint16_t color = trailColorForAge(ageSec);
+      if (color == 0) continue;
+      const int x = mapX(strike.lon, width, viewport);
+      const int y = mapY(strike.lat, height, viewport);
+      drawStrike(destination, width, height, x, y, color);
+      ++rendered;
     }
-    if (strike.lon < viewport.lonLeft || strike.lon > viewport.lonRight ||
-        strike.lat < viewport.latBottom || strike.lat > viewport.latTop) {
-      continue;
-    }
-    const int x = mapX(strike.lon, width, viewport);
-    const int y = mapY(strike.lat, height, viewport);
-    drawStrike(destination, width, height, x, y, yellow);
-    ++rendered;
   }
   return rendered > 0;
 }

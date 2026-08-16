@@ -80,6 +80,7 @@ class DeviceConfigService {
   void handleFactoryReset();
   void handleReboot();
   void handleLcdResync();
+  void handleOtaPrepare();
   void handleOtaUpload();
   void handleOtaResult();
   void handleStatusJson();
@@ -103,10 +104,11 @@ class DeviceConfigService {
   bool runtimeSettingsChanged_ = false;
   bool lcdResyncRequested_ = false;
   bool otaInProgress_ = false;
+  bool otaPrepareDisplayPending_ = false;
+  bool otaDisplayFailurePending_ = false;
   OtaDisplayCallback otaDisplayCallback_ = nullptr;
   String otaFilename_;
-  uint32_t otaLastDisplayBytes_ = 0;
-  uint32_t otaLastDisplayMs_ = 0;
+  uint32_t otaExpectedBytes_ = 0;
   bool otaSucceeded_ = false;
   uint32_t otaBytesWritten_ = 0;
   int otaError_ = 0;

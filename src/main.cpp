@@ -270,6 +270,19 @@ void requestDisplaySyncRecovery(const char* reason) {
 
 void setBacklight(bool on, const char* reason);
 
+// During ESP32-S3 flash erase/write the RGB panel can temporarily lose DMA
+// alignment because the framebuffer lives in PSRAM. Do not try to repair the
+// panel while Update.write() is active: that can stall the synchronous HTTP
+// upload. Instead hide the transient artefacts by switching only the physical
+// backlight, without touching LVGL. The next boot reinitializes the panel.
+void setOtaBacklightRaw(bool on) {
+  if (backlightOn == on) return;
+  toggle_backlight(lcdBacklightState);
+  backlightOn = on;
+  DebugLog::printf("OTA display: backlight %s during flash transfer\n",
+                   on ? "ON" : "OFF");
+}
+
 void forceDisplayRefresh() {
   if (!lvgl_port_lock(500)) return;
   lv_disp_t* display = lv_disp_get_default();
@@ -282,50 +295,42 @@ void handleOtaDisplayEvent(OtaDisplayEvent event, const char* filename,
   switch (event) {
     case OtaDisplayEvent::Start:
       otaScreenActive = true;
-      otaScreenDismissAt = 0;
-      // An OTA started from the browser must remain visible even when the
-      // weekly backlight schedule currently has the panel switched off.
+      // If the browser never starts the actual upload, return to the dashboard
+      // automatically. UPLOAD_FILE_START cancels this timeout via Progress(0).
+      otaScreenDismissAt = millis() + 15000UL;
       setBacklight(true, "OTA update");
       if (lvgl_port_lock(500)) {
         UI::showOtaScreen(filename, FW_VERSION);
-        lv_disp_t* display = lv_disp_get_default();
-        if (display) lv_refr_now(display);
+        // Do NOT call lv_refr_now() here. On this RGB panel it can wait for a
+        // flush/DMA completion and stall the WebServer before the first upload
+        // chunk arrives. The normal LVGL task renders the prepared screen.
         lvgl_port_unlock();
       }
-      // Let the simple scene reach the framebuffer before Update.begin() may
-      // erase the inactive application partition.
-      delay(35);
-      requestDisplaySyncRecovery("OTA screen start");
-      forceDisplayRefresh();
-      DebugLog::println("OTA display: minimal update screen active");
+      DebugLog::println("OTA display: preflight screen scheduled");
       break;
 
     case OtaDisplayEvent::Progress:
-      // Recover RGB DMA after a batch of flash writes, then repaint just the
-      // tiny byte counter. This avoids the map/sidebar redraws that previously
-      // made the LCD look scrambled during browser OTA.
-      requestDisplaySyncRecovery("OTA flash progress");
-      if (lvgl_port_lock(500)) {
-        UI::updateOtaScreen(bytesWritten);
-        lv_disp_t* display = lv_disp_get_default();
-        if (display) lv_refr_now(display);
-        lvgl_port_unlock();
-      }
+      // Flash transfer has started. RGB DMA can visibly jump/shift while the
+      // ESP32-S3 writes the OTA partition in external flash. Keep every LVGL
+      // and panel-DMA call out of this callback and simply blank the physical
+      // backlight until reboot. The preflight screen was visible beforehand.
+      otaScreenDismissAt = 0;
+      setOtaBacklightRaw(false);
       break;
 
     case OtaDisplayEvent::Success:
-      requestDisplaySyncRecovery("OTA finalize success");
-      if (lvgl_port_lock(500)) {
-        UI::finishOtaScreen(true, bytesWritten, 0);
-        lv_disp_t* display = lv_disp_get_default();
-        if (display) lv_refr_now(display);
-        lvgl_port_unlock();
-      }
+      // Success is intentionally display-free. Update.end() arms the reboot
+      // before the POST result handler, so touching LVGL here would only add a
+      // new opportunity to block the reboot.
       otaScreenActive = true;
-      otaScreenDismissAt = 0;  // successful OTA reboots instead
+      otaScreenDismissAt = 0;
       break;
 
     case OtaDisplayEvent::Failure:
+      // Failure is delivered after WebServer::handleClient() returns. Restore
+      // the backlight first, then repair/repaint the RGB panel once flash writes
+      // are no longer active.
+      setOtaBacklightRaw(true);
       requestDisplaySyncRecovery("OTA failure");
       if (lvgl_port_lock(500)) {
         UI::finishOtaScreen(false, bytesWritten, errorCode);
@@ -625,8 +630,9 @@ void redrawMap() {
                                       Config::MAP_H, mapViewport);
   }
 
-  // Blitzortung strikes are grouped into the same five-minute interval ending
-  // at the matching CHMI radar timestamp, so both layers animate together.
+  // Blitzortung historical strikes are restricted to the matching five-minute
+  // CHMI radar slot. The newest frame also receives a short realtime overlay,
+  // so fresh strikes appear immediately without accumulating across frames.
   if (lightningLayerEnabled && lightning.frameReady(radarFrame)) {
     lightning.renderFrame(radarFrame, buffer, Config::MAP_W, Config::MAP_H,
                           mapViewport);

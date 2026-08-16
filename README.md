@@ -1,18 +1,45 @@
 # Waveshare 7" Radar ČR + ADS-B + počasí
 
+Current firmware: **0.28.11-lightning-frame-sync**. Blitzortung strikes are assigned to one matching **5-minute CHMI radar slot**, so the same strike is no longer accumulated across consecutive animation frames. The newest radar frame additionally shows Blitzortung strikes from the **last 5 minutes in realtime**.
+
+
+
+
+## Synchronizace blesku ve verzi 0.28.11
+
+- Kazdy historicky blesk se vykresli pouze v jednom radarovem intervalu `(frame - 5 min, frame]`.
+- Tim se odstranuje opticke hromadeni stejnych blesku do svisle/stacionarni linie pri animaci.
+- Barevne stari se pro historicke sloty pocita vuci nejnovejsimu CHMI radarovemu snimku, takze zustava zachovana bila/zluta/oranzova/cervena legenda.
+- Na nejnovejsim radarovem snimku se navic okamzite zobrazi realtime Blitzortung blesky novejsi nez posledni radarovy snimek, maximalne vsak z poslednich 5 minut.
+- OTA blackout/restart z verze 0.28.9 a nova cik-cak ikona blesku zustavaji beze zmeny.
+
+## Ikona blesku ve verzi 0.28.10
+
+- Blesk se vykresluje jako souvisla vyplnena cik-cak silueta misto ridke pixelove bitmapy.
+- Tmavy jednobodovy stin zlepsuje citelnost nad jasnymi radarovymi odrazy.
+- Barevny trail zustava beze zmeny: bila 0-2 min, zluta 2-5 min, oranzova 5-10 min, cervena 10-20 min.
+
+## OTA ve verzi 0.28.9
+
+Web OTA používá přesnou velikost vybraného `firmware.bin` a během samotného
+zápisu do flash **neprovádí žádné LVGL překreslení ani restart RGB DMA**.
+OTA používá krátký preflight: prohlížeč nejprve zavolá `/ota-prepare`, obrazovka se připraví mimo upload callback a po 1100 ms začne samotné nahrávání. Jakmile začne zápis do flash, fyzické podsvícení se vypne; tím nejsou vidět dočasné posuny RGB obrazu způsobené souběhem flash zápisu a PSRAM framebufferu. Po úspěšném `Update.end(true)` je restart naplánován okamžitě, ještě před HTTP výsledkovou stránkou. Tím se omezuje blokování synchronního HTTP uploadu,
+které mohlo v předchozí verzi 0.28.6 způsobit přerušený nebo neúplný přenos.
+Před finalizací se navíc porovná počet přijatých bajtů s velikostí souboru.
+
 
 ## 0.28.5 - Blitzortung realtime + 10 km varovny kruh + stabilni OTA obrazovka
 
 - Blitzortung se prijima realtime pres WSS (`ws7/ws1/ws8.blitzortung.org`) a LZW zpravy se dekoduji primo na ESP32.
-- Jednotlive blesky `time/lat/lon` se ukladaji do kruhoveho PSRAM bufferu a zobrazuji ve stejnych 5min casovych slotech jako CHMI radar.
-- WebSocket prijima blesky prubezne; po kazde petiminutove aktualizaci radaru se pouze posunou hranice sest casovych slotu.
+- Jednotlive blesky `time/lat/lon` se ukladaji do kruhoveho PSRAM bufferu a vykresluji jako 20min barevny trail synchronizovany s CHMI radar frame.
+- Barvy podle stari: 0-2 min bila, 2-5 min zluta, 5-10 min oranzova, 10-20 min cervena.
 - Radar a blesky pouzivaji stejny index animace a stejne tlacitko pauzy.
 - Webove nastaveni obsahuje OTA upload `firmware.bin`; zapisuje se do neaktivni OTA partition a po uspechu se ESP32 restartuje. NVS nastaveni zustava zachovano.
 
 Firmware pro původní desku **Waveshare ESP32-S3-Touch-LCD-7**
 (800 × 480, ST7262, GT911, CH422G, 8 MB OPI PSRAM).
 
-Aktuální verze: **0.28.5-ota-screen**
+Aktuální verze: **0.28.11-lightning-frame-sync**
 
 > Projekt není určen pro varianty 7B/7C bez úpravy ovladače displeje.
 

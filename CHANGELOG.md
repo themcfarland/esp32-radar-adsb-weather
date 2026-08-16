@@ -1,3 +1,49 @@
+## 0.28.11 - Lightning frame sync + realtime latest frame
+
+- Blitzortung historical strikes are rendered only in their exact five-minute CHMI radar slot instead of being repeated for a 20-minute window in every frame.
+- This removes the stationary vertical accumulation visible when a thunderstorm moves between radar frames.
+- The newest radar frame also accepts Blitzortung strikes newer than the latest CHMI timestamp for up to five minutes, so new lightning appears immediately.
+- Historical colour bands remain referenced to the newest CHMI frame; live-overlay colours use actual current time.
+- OTA blackout/reboot behavior and the smooth bolt icon remain unchanged.
+
+## 0.28.10-lightning-bolt-icon
+
+- Replaced the sparse pixel lightning bitmap with a continuous filled zig-zag bolt made from two triangles.
+- Added a subtle one-pixel dark shadow so white/yellow strikes remain readable over bright radar echoes.
+- Lightning trail age colours and all stable 0.28.9 OTA behaviour are unchanged.
+
+## 0.28.9-ota-reboot-blackout
+
+- Fixed successful OTA getting stuck after `OTA: complete`: the upload callback no longer performs any success-side LVGL refresh.
+- A successful `Update.end(true)` immediately arms a fallback reboot, even if the browser never reaches the normal POST result handler.
+- The normal success response shortens the reboot delay to one second and logs the armed restart.
+- Added OTA display blackout: the preflight screen is shown first, then the physical backlight is switched off before flash writes begin. This hides ESP32-S3 RGB/PSRAM DMA shifts without touching LVGL or restarting the RGB panel during the upload.
+- OTA failures restore the backlight and repaint/resynchronise the panel only after the synchronous upload handler has returned.
+
+## 0.28.8-ota-preflight
+
+- OTA display rendering is moved out of the multipart `/update` upload callback.
+- Browser first calls `/ota-prepare`, waits 700 ms, then starts the firmware upload.
+- Removed `lv_refr_now()` from OTA start because it can block on RGB-panel flush/DMA completion.
+- Added serial checkpoints before/after `Update.begin()`, on the first upload chunk, and every 256 kB.
+- Added a 15 s preflight timeout so an abandoned OTA preparation returns to the dashboard.
+
+## 0.28.7-ota-stable
+
+- Fixed unreliable browser OTA transfers on the ESP32-S3 RGB display build.
+- The browser now sends the exact `.bin` byte size in the `/update?size=` query and `Update.begin()` uses that size, matching Espressif's current OTAWebUpdater pattern.
+- Added an explicit final byte-count check before `Update.end(true)`; a truncated upload is aborted instead of being accepted.
+- Removed LVGL redraws and `esp_lcd_rgb_panel_restart()` calls from the flash-write callback. The OTA screen is drawn once before writing and remains static until success/failure.
+- Added `Connection: close` on the successful OTA response and clearer serial logging for expected/written byte counts.
+- Lightning trail, realtime 10 km warning and all 0.28.6 functionality are retained.
+
+## 0.28.6-lightning-trail-ota
+
+- Added a 20-minute Blitzortung lightning activity trail synchronized to each displayed CHMI radar frame.
+- Lightning age colours: 0-2 min white, 2-5 min yellow, 5-10 min orange, 10-20 min red; strikes older than 20 minutes are hidden.
+- Older strikes are rendered first and fresh strikes last so the newest/brighter activity stays visible when symbols overlap.
+- Existing realtime 10 km proximity warning and stable full-screen OTA update view are retained.
+
 ## 0.28.5-ota-screen
 
 - Added a dedicated minimal full-screen OTA view on the 7-inch LCD.
