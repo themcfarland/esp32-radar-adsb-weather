@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Focused static audit for v0.28.12 independent realtime Blitzortung + robust OTA reboot/blackout."""
+"""Focused static audit for v0.28.13 realtime Blitzortung stream guard + compact trail markers + robust OTA."""
 from pathlib import Path
 import re
 import sys
@@ -42,8 +42,8 @@ ui_cpp = read("src/ui.cpp")
 patch = read("scripts/patch_display_driver.py")
 readme = read("README.md")
 
-require("0.28.12-lightning-live-independent" in version,
-        "firmware version is not v0.28.12-lightning-live-independent")
+require("0.28.13-lightning-stream-guard" in version,
+        "firmware version is not v0.28.13-lightning-stream-guard")
 require("showOtaScreen" in ui_cpp and "finishOtaScreen" in ui_cpp,
         "minimal OTA LCD screen is missing")
 progress_start = main.find("case OtaDisplayEvent::Progress:")
@@ -95,6 +95,18 @@ require("LIGHTNING_TRAIL_WHITE_MAX_AGE_SEC = 2UL * 60UL" in config and
         "for (int band = 3; band >= 0; --band)" in lightning_cpp and
         "Config::LIGHTNING_TRAIL_RED_MAX_AGE_SEC + 120" in lightning_h,
         "20-minute colour-coded lightning trail is missing or history is too short")
+require("LIGHTNING_FIRST_DATA_TIMEOUT_MS = 30UL * 1000UL" in config and
+        "LIGHTNING_STALE_DATA_TIMEOUT_MS = 30UL * 1000UL" in config and
+        "forceReconnect" in lightning_h and
+        "no first valid frame" in lightning_cpp and
+        "no valid data for 30 s" in lightning_cpp and
+        "lastValidFrameMs_ = lastSuccessMs_" in lightning_cpp,
+        "Blitzortung valid-data watchdog/failover is missing")
+require("ageSec <= Config::LIGHTNING_TRAIL_WHITE_MAX_AGE_SEC" in lightning_cpp and
+        "Older trail entries are deliberately point-like" in lightning_cpp and
+        "drawStrike(destination, width, height, x, y, color, ageSec)" in lightning_cpp,
+        "compact fresh-bolt / point-like historical lightning markers are missing")
+
 require("LIGHTNING_REDRAW_MS = 30UL * 1000UL" in config and
         "renderLive" in lightning_h and
         "LightningService::renderLive" in lightning_cpp and

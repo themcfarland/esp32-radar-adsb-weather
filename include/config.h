@@ -54,6 +54,13 @@ constexpr uint32_t LIGHTNING_TRAIL_YELLOW_MAX_AGE_SEC = 5UL * 60UL;
 constexpr uint32_t LIGHTNING_TRAIL_ORANGE_MAX_AGE_SEC = 10UL * 60UL;
 constexpr uint32_t LIGHTNING_TRAIL_RED_MAX_AGE_SEC = 20UL * 60UL;
 constexpr uint32_t LIGHTNING_REDRAW_MS = 30UL * 1000UL;
+// The direct Blitzortung websocket is a worldwide firehose. In normal operation
+// valid frames arrive continuously, so a long silent/undecodable connection is
+// treated as stale and rotated to the next ws server. This prevents an old
+// 10-20 minute red trail from remaining on screen after a half-open WSS link.
+constexpr uint32_t LIGHTNING_FIRST_DATA_TIMEOUT_MS = 30UL * 1000UL;
+constexpr uint32_t LIGHTNING_STALE_DATA_TIMEOUT_MS = 30UL * 1000UL;
+constexpr uint32_t LIGHTNING_WATCHDOG_RECONNECT_DELAY_MS = 2000UL;
 
 // Realtime lightning proximity warning around the home/station position.
 // A strike received in the last 10 minutes inside this 10 km radius makes

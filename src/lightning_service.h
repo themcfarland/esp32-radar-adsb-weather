@@ -48,6 +48,7 @@ class LightningService {
       Config::LIGHTNING_TRAIL_RED_MAX_AGE_SEC + 120;
 
   void connectCurrentServer();
+  void forceReconnect(const char* reason);
   void onWebSocketEvent(WStype_t type, uint8_t* payload, size_t length);
   bool handleCompressedMessage(const uint8_t* payload, size_t length);
   bool decodeHeaderLzw(const uint8_t* payload, size_t length, String& decoded);
@@ -63,7 +64,7 @@ class LightningService {
   bool addStrike(uint32_t epochSec, float lat, float lon);
   void pruneOldStrikes(uint32_t nowEpoch);
   void drawStrike(uint16_t* destination, uint16_t width, uint16_t height,
-                  int x, int y, uint16_t color) const;
+                  int x, int y, uint16_t color, uint32_t ageSec) const;
   uint16_t trailColorForAge(uint32_t ageSec) const;
   int mapX(float lon, uint16_t width, const MapViewport& viewport) const;
   int mapY(float lat, uint16_t height, const MapViewport& viewport) const;
@@ -84,8 +85,12 @@ class LightningService {
   uint8_t serverIndex_ = 0;
   uint32_t reconnectAtMs_ = 0;
   uint32_t lastSuccessMs_ = 0;
+  uint32_t connectedAtMs_ = 0;
+  uint32_t lastValidFrameMs_ = 0;
   uint32_t lastAgeRedrawMs_ = 0;
   uint32_t decodedMessages_ = 0;
   uint32_t rejectedMessages_ = 0;
+  uint32_t watchdogReconnects_ = 0;
+  bool forcedDisconnect_ = false;
   char status_[128] = "Blesky: Blitzortung ceka";
 };

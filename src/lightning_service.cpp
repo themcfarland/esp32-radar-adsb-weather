@@ -98,6 +98,27 @@ void LightningService::connectCurrentServer() {
   socketStarted_ = true;
 }
 
+void LightningService::forceReconnect(const char* reason) {
+  const char* oldHost = kServers[serverIndex_ % kServerCount];
+  const uint8_t nextIndex = static_cast<uint8_t>((serverIndex_ + 1U) % kServerCount);
+  Serial.printf("Lightning watchdog: %s on %s -> %s\n",
+                reason ? reason : "stale stream", oldHost, kServers[nextIndex]);
+
+  // disconnect() can synchronously emit WStype_DISCONNECTED. Mark it as forced
+  // so the callback does not rotate the server a second time.
+  forcedDisconnect_ = true;
+  webSocket_.disconnect();
+  connected_ = false;
+  socketStarted_ = false;
+  connectedAtMs_ = 0;
+  lastValidFrameMs_ = 0;
+  serverIndex_ = nextIndex;
+  reconnectAtMs_ = millis() + Config::LIGHTNING_WATCHDOG_RECONNECT_DELAY_MS;
+  ++watchdogReconnects_;
+  snprintf(status_, sizeof(status_), "Blesky: watchdog -> %s (%u)",
+           kServers[serverIndex_], static_cast<unsigned>(watchdogReconnects_));
+}
+
 bool LightningService::loop(bool enabled) {
   dataChanged_ = false;
 
@@ -118,6 +139,23 @@ bool LightningService::loop(bool enabled) {
 
   if (socketStarted_) webSocket_.loop();
 
+  // A TCP/WebSocket connection can remain half-open while no useful strike
+  // frames are delivered. Because channel 111 is global, 30 seconds without a
+  // valid decoded frame is abnormal. Rotate ws7/ws1/ws8 instead of leaving a
+  // frozen red 10-20 minute trail on screen.
+  if (connected_ && socketStarted_) {
+    const uint32_t nowMs = millis();
+    if (lastValidFrameMs_ == 0U) {
+      if (connectedAtMs_ != 0U &&
+          nowMs - connectedAtMs_ >= Config::LIGHTNING_FIRST_DATA_TIMEOUT_MS) {
+        forceReconnect("no first valid frame");
+      }
+    } else if (nowMs - lastValidFrameMs_ >=
+               Config::LIGHTNING_STALE_DATA_TIMEOUT_MS) {
+      forceReconnect("no valid data for 30 s");
+    }
+  }
+
   const time_t now = time(nullptr);
   if (now > 1700000000) pruneOldStrikes(static_cast<uint32_t>(now));
 
@@ -137,6 +175,8 @@ void LightningService::onWebSocketEvent(WStype_t type, uint8_t* payload,
   switch (type) {
     case WStype_CONNECTED:
       connected_ = true;
+      connectedAtMs_ = millis();
+      lastValidFrameMs_ = 0;
       webSocket_.sendTXT(kSubscription);
       snprintf(status_, sizeof(status_), "Blesky: Blitzortung LIVE %s, %u bodu",
                kServers[serverIndex_ % kServerCount],
@@ -147,12 +187,18 @@ void LightningService::onWebSocketEvent(WStype_t type, uint8_t* payload,
 
     case WStype_DISCONNECTED:
     case WStype_ERROR:
+      if (forcedDisconnect_) {
+        forcedDisconnect_ = false;
+        break;
+      }
       if (socketStarted_ || connected_) {
         Serial.printf("Lightning: WebSocket disconnected/error on %s\n",
                       kServers[serverIndex_ % kServerCount]);
       }
       connected_ = false;
       socketStarted_ = false;
+      connectedAtMs_ = 0;
+      lastValidFrameMs_ = 0;
       serverIndex_ = static_cast<uint8_t>((serverIndex_ + 1) % kServerCount);
       reconnectAtMs_ = millis() + kReconnectDelayMs;
       snprintf(status_, sizeof(status_), "Blesky: WSS odpojen, dalsi %s",
@@ -363,6 +409,7 @@ bool LightningService::handleCompressedMessage(const uint8_t* payload,
 
   ++decodedMessages_;
   lastSuccessMs_ = millis();
+  lastValidFrameMs_ = lastSuccessMs_;
   const uint32_t epochSec = static_cast<uint32_t>(timeNs / 1000000000ULL);
   if (decodedMessages_ <= 3U) {
     Serial.printf("Lightning decoded #%u: t=%u lat=%.6f lon=%.6f\n",
@@ -471,83 +518,67 @@ int LightningService::mapY(float lat, uint16_t height,
 
 void LightningService::drawStrike(uint16_t* destination, uint16_t width,
                                   uint16_t height, int x, int y,
-                                  uint16_t color) const {
+                                  uint16_t color, uint32_t ageSec) const {
   if (!destination || width == 0 || height == 0) return;
 
-  // Continuous zig-zag bolt. The previous icon was a sparse bitmap and its
-  // isolated pixels looked like small squares on the 7-inch panel. Here each
-  // segment is a connected line with a subtle antialiased halo and dark
-  // one-pixel shadow, while the centre line keeps the exact trail age colour.
-  auto blendPixel = [&](int px, int py, uint16_t source, uint8_t alpha) {
+  auto put = [&](int px, int py, uint16_t c) {
     if (px < 0 || py < 0 || px >= static_cast<int>(width) ||
-        py >= static_cast<int>(height) || alpha == 0) {
-      return;
-    }
-
-    const size_t index = static_cast<size_t>(py) * width + px;
-    if (alpha == 255) {
-      destination[index] = source;
-      return;
-    }
-
-    const uint16_t background = destination[index];
-    const uint32_t sr = (source >> 11) & 0x1FU;
-    const uint32_t sg = (source >> 5) & 0x3FU;
-    const uint32_t sb = source & 0x1FU;
-    const uint32_t br = (background >> 11) & 0x1FU;
-    const uint32_t bg = (background >> 5) & 0x3FU;
-    const uint32_t bb = background & 0x1FU;
-    const uint32_t inv = 255U - alpha;
-
-    const uint16_t rr = static_cast<uint16_t>((sr * alpha + br * inv + 127U) / 255U);
-    const uint16_t rg = static_cast<uint16_t>((sg * alpha + bg * inv + 127U) / 255U);
-    const uint16_t rb = static_cast<uint16_t>((sb * alpha + bb * inv + 127U) / 255U);
-    destination[index] = static_cast<uint16_t>((rr << 11) | (rg << 5) | rb);
+        py >= static_cast<int>(height)) return;
+    destination[static_cast<size_t>(py) * width + px] = c;
   };
 
-  auto drawSegment = [&](int x0, int y0, int x1, int y1, uint16_t c,
-                         uint8_t coreAlpha, uint8_t haloAlpha) {
+  auto line = [&](int x0, int y0, int x1, int y1, uint16_t c) {
     const int dx = abs(x1 - x0);
     const int sx = x0 < x1 ? 1 : -1;
     const int dy = -abs(y1 - y0);
     const int sy = y0 < y1 ? 1 : -1;
     int err = dx + dy;
-
     while (true) {
-      // Put the soft pixels perpendicular to the dominant line direction.
-      if (dx >= -dy) {
-        blendPixel(x0, y0 - 1, c, haloAlpha);
-        blendPixel(x0, y0 + 1, c, haloAlpha);
-      } else {
-        blendPixel(x0 - 1, y0, c, haloAlpha);
-        blendPixel(x0 + 1, y0, c, haloAlpha);
-      }
-      blendPixel(x0, y0, c, coreAlpha);
-
+      put(x0, y0, c);
       if (x0 == x1 && y0 == y1) break;
-      const int e2 = 2 * err;
-      if (e2 >= dy) {
-        err += dy;
-        x0 += sx;
-      }
-      if (e2 <= dx) {
-        err += dx;
-        y0 += sy;
-      }
+      const int e2 = err * 2;
+      if (e2 >= dy) { err += dy; x0 += sx; }
+      if (e2 <= dx) { err += dx; y0 += sy; }
     }
   };
 
-  auto drawBolt = [&](int ox, int oy, uint16_t c, uint8_t coreAlpha,
-                      uint8_t haloAlpha) {
-    // A compact 13 px tall lightning shape with a visible centre knee.
-    drawSegment(ox + 2, oy - 6, ox - 2, oy - 1, c, coreAlpha, haloAlpha);
-    drawSegment(ox - 2, oy - 1, ox + 1, oy - 1, c, coreAlpha, haloAlpha);
-    drawSegment(ox + 1, oy - 1, ox - 2, oy + 6, c, coreAlpha, haloAlpha);
-  };
+  const uint16_t shadow = rgb565(5, 8, 12);
 
-  const uint16_t shadow = rgb565(7, 11, 15);
-  drawBolt(x + 1, y + 1, shadow, 210, 55);
-  drawBolt(x, y, color, 255, 85);
+  if (ageSec <= Config::LIGHTNING_TRAIL_WHITE_MAX_AGE_SEC) {
+    // Only the newest 0-2 minute strike uses a recognisable compact bolt.
+    // Keep it just 9 px high so dense cells cannot merge into vertical bars.
+    line(x + 2, y - 4, x - 1, y - 1, shadow);
+    line(x - 1, y - 1, x + 1, y - 1, shadow);
+    line(x + 1, y - 1, x - 2, y + 4, shadow);
+    line(x + 1, y - 4, x - 2, y - 1, color);
+    line(x - 2, y - 1, x, y - 1, color);
+    line(x, y - 1, x - 3, y + 4, color);
+    put(x, y, color);  // exact strike coordinate
+    return;
+  }
+
+  // Older trail entries are deliberately point-like. The previous 13 px bolt
+  // repeated hundreds of times made real N-S storm lines look like artificial
+  // vertical dashed columns. A centred cross/diamond shows the exact lat/lon
+  // without implying a direction. Size fades with age; colour still carries
+  // the requested 2-5 / 5-10 / 10-20 minute trail information.
+  int radius = 1;
+  if (ageSec <= Config::LIGHTNING_TRAIL_YELLOW_MAX_AGE_SEC) radius = 2;
+
+  put(x + 1, y + 1, shadow);
+  put(x, y, color);
+  for (int d = 1; d <= radius; ++d) {
+    put(x - d, y, color);
+    put(x + d, y, color);
+    put(x, y - d, color);
+    put(x, y + d, color);
+  }
+  if (radius >= 2) {
+    put(x - 1, y - 1, color);
+    put(x + 1, y - 1, color);
+    put(x - 1, y + 1, color);
+    put(x + 1, y + 1, color);
+  }
 }
 
 uint16_t LightningService::trailColorForAge(uint32_t ageSec) const {
@@ -607,7 +638,7 @@ bool LightningService::renderLive(uint16_t* destination, uint16_t width,
       if (color == 0) continue;
       const int x = mapX(strike.lon, width, viewport);
       const int y = mapY(strike.lat, height, viewport);
-      drawStrike(destination, width, height, x, y, color);
+      drawStrike(destination, width, height, x, y, color, ageSec);
       ++rendered;
     }
   }

@@ -1,6 +1,6 @@
 # Waveshare 7" Radar ČR + ADS-B + počasí
 
-Current firmware: **0.28.12-lightning-live-independent**. Blitzortung is now rendered as an **independent realtime map layer**, just like ADS-B. CHMI radar frames animate underneath it, while lightning remains at its true `lat/lon` position and changes colour only according to real strike age.
+Current firmware: **0.28.13-lightning-stream-guard**. Blitzortung is now rendered as an **independent realtime map layer**, just like ADS-B. CHMI radar frames animate underneath it, while lightning remains at its true `lat/lon` position and changes colour only according to real strike age.
 
 ## Nezavisla realtime vrstva blesku ve verzi 0.28.12
 
@@ -37,7 +37,7 @@ Před finalizací se navíc porovná počet přijatých bajtů s velikostí soub
 Firmware pro původní desku **Waveshare ESP32-S3-Touch-LCD-7**
 (800 × 480, ST7262, GT911, CH422G, 8 MB OPI PSRAM).
 
-Aktuální verze: **0.28.12-lightning-live-independent**
+Aktuální verze: **0.28.13-lightning-stream-guard**
 
 > Projekt není určen pro varianty 7B/7C bez úpravy ovladače displeje.
 
@@ -453,3 +453,7 @@ Po výpočtu se hodnota pouze vloží do formuláře. Uživatel ji musí potvrdi
 ## OTA display
 
 During browser OTA the LCD switches to a minimal static update screen. The main dashboard and network data tasks remain paused while flash is written; the RGB panel is periodically resynchronised to prevent display scrambling.
+
+
+## Lightning stream guard (0.28.13)
+The direct Blitzortung channel 111 connection is global, so valid frames normally arrive continuously. A half-open socket can still keep TCP/WSS alive while no usable data arrives. The firmware now rotates to the next ws7/ws1/ws8 server after 30 seconds without a valid decoded frame. To avoid dense lightning activity looking like artificial vertical dashed lines, only 0-2 minute strikes use the compact bolt glyph; older trail ages are drawn as centred point markers while preserving white/yellow/orange/red age colours.

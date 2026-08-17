@@ -1,3 +1,11 @@
+# 0.28.13-lightning-stream-guard
+
+- Blitzortung stream watchdog: after connect, 30 s without a first valid frame or 30 s without any later valid decoded frame forces failover ws7 -> ws1 -> ws8.
+- Fixes the visual symptom where only old red 10-20 minute strikes remain frozen after a half-open WSS connection.
+- Lightning trail rendering is now point-centred: only fresh 0-2 min strikes use a compact 9 px bolt; older yellow/orange/red history uses small centred cross/diamond markers.
+- Exact lat/lon remains the marker centre and the requested age colours are unchanged.
+- Radar animation, 10 km alert and stable OTA blackout/reboot are unchanged.
+
 ## 0.28.12 - Lightning live independent overlay
 
 - Decoupled Blitzortung rendering completely from CHMI `radarFrame` and five-minute radar timestamps.
