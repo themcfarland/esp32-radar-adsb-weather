@@ -3,21 +3,15 @@
 #include <WiFi.h>
 #include <esp_heap_caps.h>
 #include <math.h>
-#include <stdlib.h>
 #include <string.h>
 
 
 namespace {
-constexpr const char* kServers[] = {
-    "ws7.blitzortung.org",
-    "ws1.blitzortung.org",
-    "ws8.blitzortung.org",
-};
-constexpr size_t kServerCount = sizeof(kServers) / sizeof(kServers[0]);
+constexpr char kServer[] = "live2.lightningmaps.org";
 constexpr uint16_t kWebSocketPort = 443;
 constexpr char kWebSocketPath[] = "/";
-constexpr char kSubscription[] = "{\"a\":111}";
 constexpr uint32_t kReconnectDelayMs = 5000;
+constexpr float kViewportMarginDeg = 0.35f;
 
 float mercatorY(float latitudeDeg) {
   const float latitude = constrain(latitudeDeg, -85.0f, 85.0f) * DEG_TO_RAD;
@@ -52,71 +46,70 @@ LightningService::LightningService() = default;
 LightningService::~LightningService() {
   webSocket_.disconnect();
   if (strikes_) heap_caps_free(strikes_);
-  if (lzwPrefix_) heap_caps_free(lzwPrefix_);
-  if (lzwSuffix_) heap_caps_free(lzwSuffix_);
-  if (lzwFirst_) heap_caps_free(lzwFirst_);
-  if (lzwStack_) heap_caps_free(lzwStack_);
+  delete jsonDoc_;
 }
 
 bool LightningService::begin() {
   strikes_ = static_cast<Strike*>(heap_caps_calloc(
       kMaxStrikes, sizeof(Strike), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-  lzwPrefix_ = static_cast<uint16_t*>(heap_caps_malloc(
-      kLzwDictionarySize * sizeof(uint16_t),
-      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-  lzwSuffix_ = static_cast<uint8_t*>(heap_caps_malloc(
-      kLzwDictionarySize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-  lzwFirst_ = static_cast<uint8_t*>(heap_caps_malloc(
-      kLzwDictionarySize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-  lzwStack_ = static_cast<uint8_t*>(heap_caps_malloc(
-      kLzwDictionarySize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+  jsonDoc_ = new DynamicJsonDocument(kJsonCapacity);
 
-  if (!strikes_ || !lzwPrefix_ || !lzwSuffix_ || !lzwFirst_ || !lzwStack_) {
-    snprintf(status_, sizeof(status_), "Blesky: malo PSRAM pro Blitzortung");
+  if (!strikes_ || !jsonDoc_) {
+    snprintf(status_, sizeof(status_), "Blesky: malo RAM/PSRAM pro LightningMaps");
     return false;
   }
 
   webSocket_.onEvent([this](WStype_t type, uint8_t* payload, size_t length) {
     onWebSocketEvent(type, payload, length);
   });
-  webSocket_.setReconnectInterval(60000);  // service rotates servers itself
+  webSocket_.setReconnectInterval(60000);  // service handles reconnect itself
   webSocket_.enableHeartbeat(15000, 3000, 2);
-  snprintf(status_, sizeof(status_), "Blesky: Blitzortung pripraven");
+  snprintf(status_, sizeof(status_), "Blesky: LightningMaps JSON pripraven");
   return true;
 }
 
-void LightningService::connectCurrentServer() {
-  if (WiFi.status() != WL_CONNECTED || socketStarted_) return;
-  const char* host = kServers[serverIndex_ % kServerCount];
-  snprintf(status_, sizeof(status_), "Blesky: pripojuji %s", host);
-  Serial.printf("Lightning: connecting wss://%s%s\n", host, kWebSocketPath);
+String LightningService::buildSubscription() const {
+  const float north = min(85.0f, Config::MAP_LAT_TOP + kViewportMarginDeg);
+  const float east = min(180.0f, Config::MAP_LON_RIGHT + kViewportMarginDeg);
+  const float south = max(-85.0f, Config::MAP_LAT_BOTTOM - kViewportMarginDeg);
+  const float west = max(-180.0f, Config::MAP_LON_LEFT - kViewportMarginDeg);
 
-  // Match a browser-style connection: no WebSocket subprotocol, Blitzortung origin.
-  // A null fingerprint makes arduinoWebSockets use WiFiClientSecure::setInsecure().
-  webSocket_.setExtraHeaders("Origin: https://www.blitzortung.org");
-  webSocket_.beginSSL(host, kWebSocketPort, kWebSocketPath, nullptr, "");
+  char json[320];
+  snprintf(json, sizeof(json),
+           "{\"v\":24,\"i\":{},\"s\":false,\"x\":0,\"w\":0,"
+           "\"tx\":0,\"tw\":1,\"a\":4,\"z\":6,\"b\":true,\"h\":\"\","
+           "\"l\":1,\"t\":1,\"from_lightningmaps_org\":true,"
+           "\"p\":[%.2f,%.2f,%.2f,%.2f],\"r\":\"A\"}",
+           north, east, south, west);
+  return String(json);
+}
+
+void LightningService::connectServer() {
+  if (WiFi.status() != WL_CONNECTED || socketStarted_) return;
+  snprintf(status_, sizeof(status_), "Blesky: pripojuji %s", kServer);
+  Serial.printf("Lightning: connecting wss://%s%s\n", kServer, kWebSocketPath);
+
+  // Use the same origin as the browser map. No API key or WebSocket
+  // subprotocol is required by the currently observed live2 endpoint.
+  webSocket_.setExtraHeaders("Origin: https://www.lightningmaps.org");
+  webSocket_.beginSSL(kServer, kWebSocketPort, kWebSocketPath, nullptr, "");
   socketStarted_ = true;
 }
 
 void LightningService::forceReconnect(const char* reason) {
-  const char* oldHost = kServers[serverIndex_ % kServerCount];
-  const uint8_t nextIndex = static_cast<uint8_t>((serverIndex_ + 1U) % kServerCount);
-  Serial.printf("Lightning watchdog: %s on %s -> %s\n",
-                reason ? reason : "stale stream", oldHost, kServers[nextIndex]);
+  Serial.printf("Lightning watchdog: %s on %s -> reconnect\n",
+                reason ? reason : "stale JSON feed", kServer);
 
-  // disconnect() can synchronously emit WStype_DISCONNECTED. Mark it as forced
-  // so the callback does not rotate the server a second time.
   forcedDisconnect_ = true;
   webSocket_.disconnect();
   connected_ = false;
   socketStarted_ = false;
   connectedAtMs_ = 0;
   lastValidFrameMs_ = 0;
-  serverIndex_ = nextIndex;
   reconnectAtMs_ = millis() + Config::LIGHTNING_WATCHDOG_RECONNECT_DELAY_MS;
   ++watchdogReconnects_;
-  snprintf(status_, sizeof(status_), "Blesky: watchdog -> %s (%u)",
-           kServers[serverIndex_], static_cast<unsigned>(watchdogReconnects_));
+  snprintf(status_, sizeof(status_), "Blesky: JSON watchdog reconnect (%u)",
+           static_cast<unsigned>(watchdogReconnects_));
 }
 
 bool LightningService::loop(bool enabled) {
@@ -134,34 +127,31 @@ bool LightningService::loop(bool enabled) {
   }
 
   if (!socketStarted_ && static_cast<int32_t>(millis() - reconnectAtMs_) >= 0) {
-    connectCurrentServer();
+    connectServer();
   }
 
   if (socketStarted_) webSocket_.loop();
 
-  // A TCP/WebSocket connection can remain half-open while no useful strike
-  // frames are delivered. Because channel 111 is global, 30 seconds without a
-  // valid decoded frame is abnormal. Rotate ws7/ws1/ws8 instead of leaving a
-  // frozen red 10-20 minute trail on screen.
+  // Ping/pong detects a dead TCP/WSS link. This second guard detects a socket
+  // that stays connected but stops delivering valid LightningMaps JSON. A
+  // valid envelope counts even when strokes[] is empty, so quiet weather does
+  // not depend on having a local strike.
   if (connected_ && socketStarted_) {
     const uint32_t nowMs = millis();
     if (lastValidFrameMs_ == 0U) {
       if (connectedAtMs_ != 0U &&
           nowMs - connectedAtMs_ >= Config::LIGHTNING_FIRST_DATA_TIMEOUT_MS) {
-        forceReconnect("no first valid frame");
+        forceReconnect("no first JSON frame");
       }
     } else if (nowMs - lastValidFrameMs_ >=
                Config::LIGHTNING_STALE_DATA_TIMEOUT_MS) {
-      forceReconnect("no valid data for 30 s");
+      forceReconnect("no valid JSON data");
     }
   }
 
   const time_t now = time(nullptr);
   if (now > 1700000000) pruneOldStrikes(static_cast<uint32_t>(now));
 
-  // Even with a paused radar and no newly received local strike, refresh the
-  // map periodically so white/yellow/orange/red age bands advance and strikes
-  // disappear after 20 minutes. This is independent of radarFrame.
   if (strikeCount_ > 0 &&
       millis() - lastAgeRedrawMs_ >= Config::LIGHTNING_REDRAW_MS) {
     lastAgeRedrawMs_ = millis();
@@ -173,17 +163,18 @@ bool LightningService::loop(bool enabled) {
 void LightningService::onWebSocketEvent(WStype_t type, uint8_t* payload,
                                         size_t length) {
   switch (type) {
-    case WStype_CONNECTED:
+    case WStype_CONNECTED: {
       connected_ = true;
       connectedAtMs_ = millis();
       lastValidFrameMs_ = 0;
-      webSocket_.sendTXT(kSubscription);
-      snprintf(status_, sizeof(status_), "Blesky: Blitzortung LIVE %s, %u bodu",
-               kServers[serverIndex_ % kServerCount],
+      String subscription = buildSubscription();
+      webSocket_.sendTXT(subscription);
+      snprintf(status_, sizeof(status_), "Blesky: LightningMaps LIVE, %u bodu",
                static_cast<unsigned>(strikeCount_));
-      Serial.printf("Lightning: connected to %s, subscription %s sent\n",
-                    kServers[serverIndex_ % kServerCount], kSubscription);
+      Serial.printf("Lightning: connected to %s\n", kServer);
+      Serial.printf("Lightning: subscribe %s\n", subscription.c_str());
       break;
+    }
 
     case WStype_DISCONNECTED:
     case WStype_ERROR:
@@ -192,21 +183,18 @@ void LightningService::onWebSocketEvent(WStype_t type, uint8_t* payload,
         break;
       }
       if (socketStarted_ || connected_) {
-        Serial.printf("Lightning: WebSocket disconnected/error on %s\n",
-                      kServers[serverIndex_ % kServerCount]);
+        Serial.printf("Lightning: WebSocket disconnected/error on %s\n", kServer);
       }
       connected_ = false;
       socketStarted_ = false;
       connectedAtMs_ = 0;
       lastValidFrameMs_ = 0;
-      serverIndex_ = static_cast<uint8_t>((serverIndex_ + 1) % kServerCount);
       reconnectAtMs_ = millis() + kReconnectDelayMs;
-      snprintf(status_, sizeof(status_), "Blesky: WSS odpojen, dalsi %s",
-               kServers[serverIndex_]);
+      snprintf(status_, sizeof(status_), "Blesky: WSS odpojen, reconnect");
       break;
 
     case WStype_TEXT:
-      if (payload && length > 0) handleCompressedMessage(payload, length);
+      if (payload && length > 0) handleJsonMessage(payload, length);
       break;
 
     default:
@@ -214,246 +202,104 @@ void LightningService::onWebSocketEvent(WStype_t type, uint8_t* payload,
   }
 }
 
-bool LightningService::decodeUtf8Code(const uint8_t* payload, size_t length,
-                                      size_t& offset, uint16_t& code) const {
-  if (!payload || offset >= length) return false;
-  const uint8_t b0 = payload[offset++];
-  if (b0 < 0x80U) {
-    code = b0;
-    return true;
-  }
+bool LightningService::handleJsonMessage(const uint8_t* payload,
+                                         size_t length) {
+  if (!payload || length == 0U) return false;
 
-  if ((b0 & 0xE0U) == 0xC0U && offset < length) {
-    const uint8_t b1 = payload[offset++];
-    if ((b1 & 0xC0U) != 0x80U) return false;
-    code = static_cast<uint16_t>(((b0 & 0x1FU) << 6) | (b1 & 0x3FU));
-    return true;
-  }
+  // Parse only the fields needed by the ESP32. This keeps the ArduinoJson DOM
+  // small even when the server batches many strokes in one WebSocket frame.
+  StaticJsonDocument<256> filter;
+  filter["time"] = true;
+  filter["strokes"][0]["time"] = true;
+  filter["strokes"][0]["lat"] = true;
+  filter["strokes"][0]["lon"] = true;
+  filter["strokes"][0]["id"] = true;
 
-  if ((b0 & 0xF0U) == 0xE0U && offset + 1 < length) {
-    const uint8_t b1 = payload[offset++];
-    const uint8_t b2 = payload[offset++];
-    if ((b1 & 0xC0U) != 0x80U || (b2 & 0xC0U) != 0x80U) return false;
-    code = static_cast<uint16_t>(((b0 & 0x0FU) << 12) |
-                                 ((b1 & 0x3FU) << 6) | (b2 & 0x3FU));
-    return true;
-  }
-
-  // Blitzortung's browser LZW decoder uses JavaScript charCodeAt(), therefore
-  // useful dictionary symbols are 16-bit code units. Four-byte UTF-8 is not
-  // expected here and is rejected instead of silently corrupting the stream.
-  return false;
-}
-
-bool LightningService::appendDictionaryEntry(uint16_t code, uint16_t nextCode,
-                                              String& output,
-                                              uint8_t& firstChar) {
-  if (code < 256U) {
-    firstChar = static_cast<uint8_t>(code);
-    output += static_cast<char>(firstChar);
-    return true;
-  }
-  if (code >= nextCode || code >= kLzwDictionarySize) return false;
-
-  size_t depth = 0;
-  uint16_t cursor = code;
-  while (cursor >= 256U) {
-    if (cursor >= nextCode || cursor >= kLzwDictionarySize ||
-        depth >= kLzwDictionarySize - 1) {
-      return false;
-    }
-    lzwStack_[depth++] = lzwSuffix_[cursor];
-    cursor = lzwPrefix_[cursor];
-  }
-  lzwStack_[depth++] = static_cast<uint8_t>(cursor);
-  firstChar = lzwStack_[depth - 1];
-  while (depth > 0) output += static_cast<char>(lzwStack_[--depth]);
-  return true;
-}
-
-bool LightningService::decodeHeaderLzw(const uint8_t* payload, size_t length,
-                                       String& decoded) {
-  decoded = "";
-  decoded.reserve(384);
-  if (!payload || length == 0) return false;
-
-  size_t offset = 0;
-  uint16_t firstCode = 0;
-  if (!decodeUtf8Code(payload, length, offset, firstCode) || firstCode >= 256U) {
-    return false;
-  }
-
-  decoded += static_cast<char>(firstCode);
-  uint16_t previousCode = firstCode;
-  uint8_t previousFirst = static_cast<uint8_t>(firstCode);
-  uint16_t nextCode = 256U;
-
-  while (offset < length && decoded.length() < 768U) {
-    uint16_t code = 0;
-    if (!decodeUtf8Code(payload, length, offset, code)) return false;
-    if (code > nextCode || nextCode >= kLzwDictionarySize) return false;
-
-    uint8_t currentFirst = 0;
-    if (code < 256U) {
-      currentFirst = static_cast<uint8_t>(code);
-    } else if (code < nextCode) {
-      currentFirst = lzwFirst_[code];
-    } else {  // KwKwK case: current entry is previous + first(previous)
-      currentFirst = previousFirst;
-    }
-
-    lzwPrefix_[nextCode] = previousCode;
-    lzwSuffix_[nextCode] = currentFirst;
-    lzwFirst_[nextCode] = previousFirst;
-    const uint16_t insertedCode = nextCode;
-    ++nextCode;
-
-    uint8_t emittedFirst = 0;
-    const uint16_t emitCode = (code == insertedCode) ? insertedCode : code;
-    if (!appendDictionaryEntry(emitCode, nextCode, decoded, emittedFirst)) {
-      return false;
-    }
-
-    previousCode = code;
-    previousFirst = currentFirst;
-
-    uint64_t timeNs = 0;
-    float lat = 0.0f;
-    float lon = 0.0f;
-    if (decoded.length() > 45U && extractStrikeHeader(decoded, timeNs, lat, lon)) {
-      return true;
-    }
-  }
-
-  uint64_t timeNs = 0;
-  float lat = 0.0f;
-  float lon = 0.0f;
-  return extractStrikeHeader(decoded, timeNs, lat, lon);
-}
-
-bool LightningService::parseUnsignedField(const String& text, const char* key,
-                                          uint64_t& value) const {
-  const int keyPos = text.indexOf(key);
-  if (keyPos < 0) return false;
-  int p = text.indexOf(':', keyPos + strlen(key));
-  if (p < 0) return false;
-  ++p;
-  while (p < static_cast<int>(text.length()) && text[p] == ' ') ++p;
-  const int start = p;
-  while (p < static_cast<int>(text.length()) && text[p] >= '0' && text[p] <= '9') ++p;
-  if (p == start) return false;
-  char number[32];
-  const size_t n = min(static_cast<size_t>(p - start), sizeof(number) - 1);
-  memcpy(number, text.c_str() + start, n);
-  number[n] = '\0';
-  value = strtoull(number, nullptr, 10);
-  return value > 0;
-}
-
-bool LightningService::parseFloatField(const String& text, const char* key,
-                                       float& value) const {
-  const int keyPos = text.indexOf(key);
-  if (keyPos < 0) return false;
-  int p = text.indexOf(':', keyPos + strlen(key));
-  if (p < 0) return false;
-  ++p;
-  while (p < static_cast<int>(text.length()) && text[p] == ' ') ++p;
-  const int start = p;
-  if (p < static_cast<int>(text.length()) && (text[p] == '-' || text[p] == '+')) ++p;
-  while (p < static_cast<int>(text.length()) &&
-         ((text[p] >= '0' && text[p] <= '9') || text[p] == '.' ||
-          text[p] == 'e' || text[p] == 'E' || text[p] == '-' || text[p] == '+')) {
-    ++p;
-  }
-  if (p == start) return false;
-  char number[32];
-  const size_t n = min(static_cast<size_t>(p - start), sizeof(number) - 1);
-  memcpy(number, text.c_str() + start, n);
-  number[n] = '\0';
-  value = strtof(number, nullptr);
-  return isfinite(value);
-}
-
-bool LightningService::extractStrikeHeader(const String& decoded,
-                                            uint64_t& timeNs, float& lat,
-                                            float& lon) const {
-  return parseUnsignedField(decoded, "\"time\"", timeNs) &&
-         parseFloatField(decoded, "\"lat\"", lat) &&
-         parseFloatField(decoded, "\"lon\"", lon);
-}
-
-bool LightningService::handleCompressedMessage(const uint8_t* payload,
-                                               size_t length) {
-  String header;
-  if (!decodeHeaderLzw(payload, length, header)) {
-    ++rejectedMessages_;
-    if (rejectedMessages_ <= 3U || (rejectedMessages_ & 0x3FU) == 1U) {
-      Serial.printf("Lightning: LZW/header decode failed, compressed=%u bytes, rejected=%u\n",
-                    static_cast<unsigned>(length),
-                    static_cast<unsigned>(rejectedMessages_));
-      if (!header.isEmpty()) {
-        String preview = header.substring(0, min(static_cast<unsigned>(header.length()), 180U));
-        Serial.printf("Lightning decoded preview: %s\n", preview.c_str());
-      }
+  if (!jsonDoc_) return false;
+  jsonDoc_->clear();
+  const DeserializationError error = deserializeJson(
+      *jsonDoc_, payload, length, DeserializationOption::Filter(filter));
+  if (error) {
+    ++jsonErrors_;
+    if (jsonErrors_ <= 5U || (jsonErrors_ & 0x3FU) == 1U) {
+      Serial.printf("Lightning: JSON parse failed (%s), bytes=%u, errors=%u\n",
+                    error.c_str(), static_cast<unsigned>(length),
+                    static_cast<unsigned>(jsonErrors_));
     }
     return false;
   }
 
-  uint64_t timeNs = 0;
-  float lat = 0.0f;
-  float lon = 0.0f;
-  if (!extractStrikeHeader(header, timeNs, lat, lon)) {
-    ++rejectedMessages_;
+  if (!(*jsonDoc_)["time"].is<uint32_t>() ||
+      !(*jsonDoc_)["strokes"].is<JsonArray>()) {
+    ++jsonErrors_;
     return false;
   }
 
-  ++decodedMessages_;
+  ++jsonMessages_;
   lastSuccessMs_ = millis();
   lastValidFrameMs_ = lastSuccessMs_;
-  const uint32_t epochSec = static_cast<uint32_t>(timeNs / 1000000000ULL);
-  if (decodedMessages_ <= 3U) {
-    Serial.printf("Lightning decoded #%u: t=%u lat=%.6f lon=%.6f\n",
-                  static_cast<unsigned>(decodedMessages_),
-                  static_cast<unsigned>(epochSec), lat, lon);
-  }
-  if (epochSec < 1700000000UL || fabsf(lat) > 90.0f || fabsf(lon) > 180.0f) {
-    ++rejectedMessages_;
-    return false;
+
+  JsonArray strokes = (*jsonDoc_)["strokes"].as<JsonArray>();
+  size_t accepted = 0;
+  for (JsonObject stroke : strokes) {
+    const uint64_t timeMs = stroke["time"] | 0ULL;
+    const float lat = stroke["lat"] | NAN;
+    const float lon = stroke["lon"] | NAN;
+    const uint32_t id = stroke["id"] | 0U;
+
+    if (timeMs < 1700000000000ULL || !isfinite(lat) || !isfinite(lon) ||
+        fabsf(lat) > 90.0f || fabsf(lon) > 180.0f) {
+      continue;
+    }
+
+    const uint32_t epochSec = static_cast<uint32_t>(timeMs / 1000ULL);
+    ++strokesReceived_;
+    if (strokesReceived_ <= 5U) {
+      Serial.printf("Lightning JSON #%u: id=%u t=%u lat=%.6f lon=%.6f\n",
+                    static_cast<unsigned>(strokesReceived_),
+                    static_cast<unsigned>(id),
+                    static_cast<unsigned>(epochSec), lat, lon);
+    }
+    if (addStrike(epochSec, lat, lon, id)) {
+      ++accepted;
+      dataChanged_ = true;
+    }
   }
 
-  const bool accepted = addStrike(epochSec, lat, lon);
-  if (accepted) dataChanged_ = true;
-
-  if ((decodedMessages_ & 0x7FU) == 1U || accepted) {
+  if (jsonMessages_ <= 3U || accepted > 0U || (jsonMessages_ & 0x7FU) == 1U) {
     snprintf(status_, sizeof(status_),
-             "Blesky: Blitzortung LIVE %s, %u bodu",
-             kServers[serverIndex_ % kServerCount],
+             "Blesky: LightningMaps LIVE, %u bodu",
              static_cast<unsigned>(strikeCount_));
   }
   return true;
 }
 
-bool LightningService::addStrike(uint32_t epochSec, float lat, float lon) {
-  // Keep only strikes that can become visible in the fixed Czech map plus a
-  // small edge margin. This avoids storing the global Blitzortung firehose.
+bool LightningService::addStrike(uint32_t epochSec, float lat, float lon,
+                                 uint32_t id) {
+  // Keep a local guard even though LightningMaps already filters the feed by
+  // viewport. This protects the buffer if the remote subscription semantics
+  // ever change.
   constexpr float margin = 0.35f;
   if (lat < Config::MAP_LAT_BOTTOM - margin || lat > Config::MAP_LAT_TOP + margin ||
       lon < Config::MAP_LON_LEFT - margin || lon > Config::MAP_LON_RIGHT + margin) {
     return false;
   }
 
-  // Cheap duplicate guard for reconnects/replayed messages.
-  const size_t check = min(strikeCount_, static_cast<size_t>(12));
+  // LightningMaps provides a stable stroke id. Prefer it for duplicate
+  // suppression after reconnects/replayed batches; retain a coordinate/time
+  // fallback in case an id is ever missing.
+  const size_t check = min(strikeCount_, static_cast<size_t>(32));
   for (size_t i = 0; i < check; ++i) {
     const size_t idx = (strikeWrite_ + kMaxStrikes - 1 - i) % kMaxStrikes;
     const Strike& old = strikes_[idx];
+    if (id != 0U && old.id == id) return false;
     if (old.epochSec == epochSec && fabsf(old.lat - lat) < 0.00001f &&
         fabsf(old.lon - lon) < 0.00001f) {
       return false;
     }
   }
 
-  strikes_[strikeWrite_] = {lat, lon, epochSec};
+  strikes_[strikeWrite_] = {lat, lon, epochSec, id};
   strikeWrite_ = (strikeWrite_ + 1) % kMaxStrikes;
   if (strikeCount_ < kMaxStrikes) ++strikeCount_;
   return true;

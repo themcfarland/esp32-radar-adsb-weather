@@ -630,7 +630,7 @@ void redrawMap() {
                                       Config::MAP_H, mapViewport);
   }
 
-  // Blitzortung is a realtime layer independent of the CHMI radar image, just
+  // LightningMaps is a realtime layer independent of the CHMI radar image, just
   // like ADS-B. Radar animation may change underneath while the same lightning
   // trail remains positioned by lat/lon and ages against the real clock.
   if (lightningLayerEnabled && lightning.ready()) {
@@ -847,7 +847,7 @@ void loop() {
   }
 
   // While OTA is active (or its simple result screen is intentionally kept
-  // visible), do not run radar, Blitzortung, weather, map redraws or settings
+  // visible), do not run radar, LightningMaps, weather, map redraws or settings
   // writes. WebServer still receives upload chunks because deviceConfig.loop()
   // runs first.
   if (deviceConfig.otaInProgress() || otaScreenActive) {
@@ -855,7 +855,7 @@ void loop() {
     return;
   }
 
-  // Keep the realtime Blitzortung WSS client serviced continuously. A new
+  // Keep the realtime LightningMaps WSS client serviced continuously. A new
   // strike requests a redraw even while the radar animation is paused.
   if (lightning.loop(lightningLayerEnabled && deviceConfig.stationConnected())) {
     mapDirty = true;

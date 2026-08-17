@@ -19,8 +19,8 @@ for radar_frame in range(6):
     assert visible(fresh, now), radar_frame
     assert not visible(old, now), radar_frame
 
-# Blitzortung nanosecond timestamp still converts to normal Unix seconds.
-time_ns = 1786808428328945400
-assert time_ns // 1_000_000_000 == 1786808428
+# LightningMaps millisecond timestamp converts to normal Unix seconds.
+time_ms = 1786977510249
+assert time_ms // 1000 == 1786977510
 
 print("LIGHTNING LIVE TEST OK: visibility is independent of radar frames")

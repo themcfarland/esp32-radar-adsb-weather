@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Focused static audit for v0.28.13 realtime Blitzortung stream guard + compact trail markers + robust OTA."""
+"""Focused static audit for v0.28.15 LightningMaps build fix + plain-JSON realtime feed + robust OTA."""
 from pathlib import Path
 import re
 import sys
@@ -42,8 +42,8 @@ ui_cpp = read("src/ui.cpp")
 patch = read("scripts/patch_display_driver.py")
 readme = read("README.md")
 
-require("0.28.13-lightning-stream-guard" in version,
-        "firmware version is not v0.28.13-lightning-stream-guard")
+require("0.28.15-lightningmaps-buildfix" in version,
+        "firmware version is not v0.28.15-lightningmaps-buildfix")
 require("showOtaScreen" in ui_cpp and "finishOtaScreen" in ui_cpp,
         "minimal OTA LCD screen is missing")
 progress_start = main.find("case OtaDisplayEvent::Progress:")
@@ -95,13 +95,13 @@ require("LIGHTNING_TRAIL_WHITE_MAX_AGE_SEC = 2UL * 60UL" in config and
         "for (int band = 3; band >= 0; --band)" in lightning_cpp and
         "Config::LIGHTNING_TRAIL_RED_MAX_AGE_SEC + 120" in lightning_h,
         "20-minute colour-coded lightning trail is missing or history is too short")
-require("LIGHTNING_FIRST_DATA_TIMEOUT_MS = 30UL * 1000UL" in config and
-        "LIGHTNING_STALE_DATA_TIMEOUT_MS = 30UL * 1000UL" in config and
+require("LIGHTNING_FIRST_DATA_TIMEOUT_MS = 60UL * 1000UL" in config and
+        "LIGHTNING_STALE_DATA_TIMEOUT_MS = 120UL * 1000UL" in config and
         "forceReconnect" in lightning_h and
-        "no first valid frame" in lightning_cpp and
-        "no valid data for 30 s" in lightning_cpp and
+        "no first JSON frame" in lightning_cpp and
+        "no valid JSON data" in lightning_cpp and
         "lastValidFrameMs_ = lastSuccessMs_" in lightning_cpp,
-        "Blitzortung valid-data watchdog/failover is missing")
+        "LightningMaps valid-JSON watchdog/reconnect is missing")
 require("ageSec <= Config::LIGHTNING_TRAIL_WHITE_MAX_AGE_SEC" in lightning_cpp and
         "Older trail entries are deliberately point-like" in lightning_cpp and
         "drawStrike(destination, width, height, x, y, color, ageSec)" in lightning_cpp,
@@ -322,21 +322,27 @@ require("consumeMapTap" in main and "nextZoomMode" in main,
         "touch map zoom is missing")
 
 
-# Blitzortung realtime lightning overlay.
-require("links2004/WebSockets@2.7.2" in pio,
-        "arduinoWebSockets dependency is missing")
+# LightningMaps realtime plain-JSON lightning overlay.
+require("links2004/WebSockets@2.7.2" in pio and
+        "bblanchon/ArduinoJson@6.21.5" in pio,
+        "WebSocket/ArduinoJson dependencies are missing")
 require("class LightningService" in lightning_h and
         "WebSocketsClient" in lightning_h and
-        "ws7.blitzortung.org" in lightning_cpp and
-        "kSubscription" in lightning_cpp and
-        "decodeHeaderLzw" in lightning_cpp and
-        "timeNs / 1000000000ULL" in lightning_cpp,
-        "Blitzortung WebSocket/LZW receive path is incomplete")
+        "live2.lightningmaps.org" in lightning_cpp and
+        "from_lightningmaps_org" in lightning_cpp and
+        "buildSubscription" in lightning_cpp and
+        "deserializeJson" in lightning_cpp and
+        "DeserializationOption::Filter" in lightning_cpp and
+        "timeMs / 1000ULL" in lightning_cpp and
+        "decodeHeaderLzw" not in lightning_cpp and
+        "ws7.blitzortung.org" not in lightning_cpp,
+        "LightningMaps WebSocket/plain-JSON receive path is incomplete")
 require("kMaxStrikes = 4096" in lightning_h and
         "MALLOC_CAP_SPIRAM" in lightning_cpp and
+        "uint32_t id = 0" in lightning_h and
         "addStrike" in lightning_cpp and
         "pruneOldStrikes" in lightning_cpp,
-        "Blitzortung PSRAM strike buffer is incomplete")
+        "LightningMaps PSRAM strike buffer is incomplete")
 require('preferences.putBool("layer_lightning"' in device_cpp and
         'preferences.getBool("layer_lightning", true)' in device_cpp and
         "name='layer_lightning'" in device_cpp,
@@ -357,7 +363,7 @@ require("renderLive" in lightning_h and
         "LIGHTNING_TRAIL_RED_MAX_AGE_SEC" in lightning_cpp and
         "updateForRadar" not in lightning_h and
         "radarFrameTimes_" not in lightning_h,
-        "independent Blitzortung realtime render path is incomplete")
+        "independent LightningMaps realtime render path is incomplete")
 require("lightning.begin()" in main and
         "lightning.loop(" in main and
         "lightning.renderLive" in main and
@@ -490,5 +496,5 @@ print("Zambretti: A-Z codes, season and optional WU wind correction")
 print("Diagnostics: barometer, Zambretti and lightning status exposed on web")
 print("Display: conservative 20-line buffer, no periodic DMA watchdog")
 print("Radar: runtime PNG update remains RAM-only")
-print("Lightning: Blitzortung realtime WSS, independent 20 min live overlay")
+print("Lightning: LightningMaps plain-JSON WSS, viewport-filtered independent 20 min live overlay")
 print("OTA: browser firmware upload to dual OTA app partitions")

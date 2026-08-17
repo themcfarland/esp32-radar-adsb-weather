@@ -1,3 +1,16 @@
+# 0.28.15-lightningmaps-buildfix
+
+- Compile fix for arduinoWebSockets `sendTXT(String&)`: subscription String is now mutable instead of `const`.
+- No functional changes to LightningMaps JSON parsing, lightning rendering, proximity alert, radar, ADS-B, or OTA.
+
+- Replaced the unofficial global `ws7/ws1/ws8.blitzortung.org` LZW transport with the verified viewport-filtered plain-JSON WebSocket `wss://live2.lightningmaps.org/`.
+- On connect sends the browser-compatible subscription with `p=[north,east,south,west]`; the Czech map plus margin is requested, reducing network traffic and eliminating unrelated global strikes before parsing.
+- Parses only `strokes[].time`, `lat`, `lon` and `id` with ArduinoJson filtering. The observed millisecond timestamp is converted with `/1000` to Unix seconds.
+- Uses LightningMaps stroke `id` for duplicate suppression and retains a coordinate/time fallback.
+- Removed the ESP32 LZW dictionary, UTF-8 LZW decoder and ws7/ws1/ws8 failover code.
+- WSS heartbeat remains active. A valid JSON envelope (including an empty `strokes[]`) feeds the data watchdog; a stale connected feed reconnects `live2`.
+- Realtime independent rendering, 20-minute colour trail, 10 km home alert, radar/ADS-B layers and stable OTA blackout/reboot remain unchanged.
+
 # 0.28.13-lightning-stream-guard
 
 - Blitzortung stream watchdog: after connect, 30 s without a first valid frame or 30 s without any later valid decoded frame forces failover ws7 -> ws1 -> ws8.

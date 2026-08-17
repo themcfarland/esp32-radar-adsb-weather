@@ -1,6 +1,18 @@
 # Waveshare 7" Radar ČR + ADS-B + počasí
 
-Current firmware: **0.28.13-lightning-stream-guard**. Blitzortung is now rendered as an **independent realtime map layer**, just like ADS-B. CHMI radar frames animate underneath it, while lightning remains at its true `lat/lon` position and changes colour only according to real strike age.
+Current firmware: **0.28.15-lightningmaps-buildfix**. Lightning now uses the viewport-filtered **LightningMaps plain-JSON WebSocket** at `wss://live2.lightningmaps.org/`. The old global Blitzortung `ws7/ws1/ws8` LZW decoder has been removed.
+
+## 0.28.14 - LightningMaps plain JSON
+
+- WSS endpoint: `live2.lightningmaps.org`, port 443, path `/`.
+- On connect the ESP32 sends the verified viewport subscription with `p=[north,east,south,west]`; for the full Czech map it requests approximately `[51.65,19.35,47.95,11.35]`.
+- Incoming batches are plain JSON: top-level `time` plus `strokes[]`; only `time`, `lat`, `lon` and `id` are parsed.
+- Stroke timestamps are milliseconds since Unix epoch and are converted with `timeMs / 1000`.
+- LightningMaps `id` is used to suppress replay duplicates after reconnect.
+- The remote viewport filter plus a local map guard prevents Italian/European strikes outside the Czech map from filling the PSRAM buffer.
+- A valid JSON envelope refreshes the stream watchdog even when `strokes` is empty. WSS heartbeat remains enabled; a connected socket with no valid JSON is reconnected.
+- Rendering stays independent of radar animation: 0-2 min white bolt, 2-5 min yellow, 5-10 min orange, 10-20 min red, then expiry.
+- 10 km proximity alert and the proven OTA blackout/reboot path are unchanged.
 
 ## Nezavisla realtime vrstva blesku ve verzi 0.28.12
 
@@ -37,7 +49,7 @@ Před finalizací se navíc porovná počet přijatých bajtů s velikostí soub
 Firmware pro původní desku **Waveshare ESP32-S3-Touch-LCD-7**
 (800 × 480, ST7262, GT911, CH422G, 8 MB OPI PSRAM).
 
-Aktuální verze: **0.28.13-lightning-stream-guard**
+Aktuální verze: **0.28.15-lightningmaps-buildfix**
 
 > Projekt není určen pro varianty 7B/7C bez úpravy ovladače displeje.
 
@@ -130,7 +142,7 @@ až po přechodu do hlavního rozhraní.
 - první nastavení přes Wi-Fi AP,
 - trvale dostupné webové nastavení v domácí Wi-Fi,
 - grafické zvýraznění až tří letounů podle callsignu nebo ICAO hex,
-- nezávislé zapínání radarové, bleskové Blitzortung a ADS-B vrstvy,
+- nezávislé zapínání radarové, bleskové LightningMaps a ADS-B vrstvy,
 - místní hodiny a datum s automatickým CET/CEST,
 - webová diagnostika na `/diagnostics`,
 - týdenní plán podsvícení od pondělí do neděle,
@@ -457,3 +469,7 @@ During browser OTA the LCD switches to a minimal static update screen. The main 
 
 ## Lightning stream guard (0.28.13)
 The direct Blitzortung channel 111 connection is global, so valid frames normally arrive continuously. A half-open socket can still keep TCP/WSS alive while no usable data arrives. The firmware now rotates to the next ws7/ws1/ws8 server after 30 seconds without a valid decoded frame. To avoid dense lightning activity looking like artificial vertical dashed lines, only 0-2 minute strikes use the compact bolt glyph; older trail ages are drawn as centred point markers while preserving white/yellow/orange/red age colours.
+
+### Overeny format LightningMaps zpravy
+
+Firmware pocita s overenym tvarem `{"time":...,"strokes":[...]}`. Kazdy prvek `strokes` obsahuje millisekundovy `time`, `lat`, `lon` a `id`; dalsi pole jako `src`, `srv`, `del` a `dev` jsou zamerne ignorovana. Napr. `1786977510249` se ulozi jako Unix sekunda `1786977510`.

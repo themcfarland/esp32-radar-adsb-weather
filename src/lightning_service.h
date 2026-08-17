@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include <ArduinoJson.h>
 #include <WebSocketsClient.h>
 #include <time.h>
 
@@ -40,28 +41,20 @@ class LightningService {
     float lat = 0.0f;
     float lon = 0.0f;
     uint32_t epochSec = 0;
+    uint32_t id = 0;
   };
 
   static constexpr size_t kMaxStrikes = 4096;
-  static constexpr uint16_t kLzwDictionarySize = 16384;
+  static constexpr size_t kJsonCapacity = 24576;
   static constexpr uint32_t kHistorySeconds =
       Config::LIGHTNING_TRAIL_RED_MAX_AGE_SEC + 120;
 
-  void connectCurrentServer();
+  void connectServer();
   void forceReconnect(const char* reason);
   void onWebSocketEvent(WStype_t type, uint8_t* payload, size_t length);
-  bool handleCompressedMessage(const uint8_t* payload, size_t length);
-  bool decodeHeaderLzw(const uint8_t* payload, size_t length, String& decoded);
-  bool decodeUtf8Code(const uint8_t* payload, size_t length, size_t& offset,
-                      uint16_t& code) const;
-  bool appendDictionaryEntry(uint16_t code, uint16_t nextCode,
-                             String& output, uint8_t& firstChar);
-  bool extractStrikeHeader(const String& decoded, uint64_t& timeNs,
-                           float& lat, float& lon) const;
-  bool parseUnsignedField(const String& text, const char* key,
-                          uint64_t& value) const;
-  bool parseFloatField(const String& text, const char* key, float& value) const;
-  bool addStrike(uint32_t epochSec, float lat, float lon);
+  bool handleJsonMessage(const uint8_t* payload, size_t length);
+  String buildSubscription() const;
+  bool addStrike(uint32_t epochSec, float lat, float lon, uint32_t id);
   void pruneOldStrikes(uint32_t nowEpoch);
   void drawStrike(uint16_t* destination, uint16_t width, uint16_t height,
                   int x, int y, uint16_t color, uint32_t ageSec) const;
@@ -71,26 +64,22 @@ class LightningService {
 
   WebSocketsClient webSocket_;
   Strike* strikes_ = nullptr;
+  DynamicJsonDocument* jsonDoc_ = nullptr;
   size_t strikeCount_ = 0;
   size_t strikeWrite_ = 0;
-
-  uint16_t* lzwPrefix_ = nullptr;
-  uint8_t* lzwSuffix_ = nullptr;
-  uint8_t* lzwFirst_ = nullptr;
-  uint8_t* lzwStack_ = nullptr;
 
   bool socketStarted_ = false;
   bool connected_ = false;
   bool dataChanged_ = false;
-  uint8_t serverIndex_ = 0;
   uint32_t reconnectAtMs_ = 0;
   uint32_t lastSuccessMs_ = 0;
   uint32_t connectedAtMs_ = 0;
   uint32_t lastValidFrameMs_ = 0;
   uint32_t lastAgeRedrawMs_ = 0;
-  uint32_t decodedMessages_ = 0;
-  uint32_t rejectedMessages_ = 0;
+  uint32_t jsonMessages_ = 0;
+  uint32_t jsonErrors_ = 0;
+  uint32_t strokesReceived_ = 0;
   uint32_t watchdogReconnects_ = 0;
   bool forcedDisconnect_ = false;
-  char status_[128] = "Blesky: Blitzortung ceka";
+  char status_[128] = "Blesky: LightningMaps ceka";
 };

@@ -33,9 +33,9 @@ constexpr uint8_t RADAR_FRAME_COUNT = 6;
 constexpr uint8_t RADAR_LOOKBACK_STEPS = 48;  // 4 hours in five-minute steps.
 constexpr uint32_t RADAR_STEP_SECONDS = 5UL * 60UL;
 
-// Blitzortung lightning is an independent realtime overlay, just like ADS-B.
-// Radar animation changes only the CHMI image; lightning positions and colours
-// are always evaluated against the real current time.
+// LightningMaps plain-JSON lightning is an independent realtime overlay, just
+// like ADS-B. Radar animation changes only the CHMI image; lightning positions
+// and colours are always evaluated against the real current time.
 // MAX_Z_masked visually matches the CHMI web radar: echoes unlikely to reach
 // the ground are shown with lighter, less saturated colours.
 constexpr char RADAR_BASE_URL[] =
@@ -54,12 +54,11 @@ constexpr uint32_t LIGHTNING_TRAIL_YELLOW_MAX_AGE_SEC = 5UL * 60UL;
 constexpr uint32_t LIGHTNING_TRAIL_ORANGE_MAX_AGE_SEC = 10UL * 60UL;
 constexpr uint32_t LIGHTNING_TRAIL_RED_MAX_AGE_SEC = 20UL * 60UL;
 constexpr uint32_t LIGHTNING_REDRAW_MS = 30UL * 1000UL;
-// The direct Blitzortung websocket is a worldwide firehose. In normal operation
-// valid frames arrive continuously, so a long silent/undecodable connection is
-// treated as stale and rotated to the next ws server. This prevents an old
-// 10-20 minute red trail from remaining on screen after a half-open WSS link.
-constexpr uint32_t LIGHTNING_FIRST_DATA_TIMEOUT_MS = 30UL * 1000UL;
-constexpr uint32_t LIGHTNING_STALE_DATA_TIMEOUT_MS = 30UL * 1000UL;
+// live2.lightningmaps.org sends viewport-filtered JSON batches. Heartbeat checks
+// the WSS transport; these longer guards reconnect the same endpoint if the
+// socket remains open but valid JSON envelopes stop arriving.
+constexpr uint32_t LIGHTNING_FIRST_DATA_TIMEOUT_MS = 60UL * 1000UL;
+constexpr uint32_t LIGHTNING_STALE_DATA_TIMEOUT_MS = 120UL * 1000UL;
 constexpr uint32_t LIGHTNING_WATCHDOG_RECONNECT_DELAY_MS = 2000UL;
 
 // Realtime lightning proximity warning around the home/station position.
