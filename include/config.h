@@ -68,6 +68,17 @@ constexpr float LIGHTNING_ALERT_RADIUS_KM = 10.0f;
 constexpr uint32_t LIGHTNING_ALERT_MAX_AGE_SEC = 10UL * 60UL;
 
 constexpr uint32_t ADSB_REFRESH_MS = 2000;
+// Hybrid ADS-B: keep the fast local receiver and supplement the whole Czech
+// map with adsb.fi Open Data. The public API allows up to 250 NM; 180 NM from
+// the map centre covers the full configured Czech viewport with margin.
+constexpr char ADSB_FI_BASE_URL[] = "https://opendata.adsb.fi/api";
+constexpr char ADSB_LOL_BASE_URL[] = "https://api.adsb.lol";
+constexpr float ADSB_FI_CENTER_LAT = 49.80f;
+constexpr float ADSB_FI_CENTER_LON = 15.35f;
+constexpr uint16_t ADSB_FI_RADIUS_NM = 180;
+constexpr uint32_t ADSB_FI_REFRESH_MS = 10UL * 1000UL;
+constexpr uint32_t ADSB_LOCAL_CACHE_MAX_AGE_MS = 10UL * 1000UL;
+constexpr uint32_t ADSB_FI_CACHE_MAX_AGE_MS = 30UL * 1000UL;
 constexpr uint32_t RADAR_REFRESH_MS = 5UL * 60UL * 1000UL;
 constexpr uint32_t RADAR_ANIMATION_MS = 1400;
 // Personal-station observations refresh every 5 min; the 48 h hourly forecast hourly.
@@ -82,7 +93,7 @@ constexpr char CONFIG_HOSTNAME[] = "radar-adsb";
 constexpr char CONFIG_AP_PREFIX[] = "Radar-ADSB-Setup";
 constexpr char CONFIG_AP_PASSWORD[] = "radarsetup";
 
-constexpr size_t MAX_AIRCRAFT = 80;
+constexpr size_t MAX_AIRCRAFT = 180;
 constexpr uint32_t AIRCRAFT_MAX_AGE_SEC = 30;
 constexpr uint8_t I2C_SDA_PIN = 8;
 constexpr uint8_t I2C_SCL_PIN = 9;

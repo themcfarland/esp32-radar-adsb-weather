@@ -854,8 +854,9 @@ void drawReference(lv_obj_t* canvas, uint16_t* buffer, uint16_t width,
   snprintf(footer, sizeof(footer), "%s | tap: 50 > 25 > 10 > CR", layerText);
   drawText(canvas, 10, height - 18, 340, footer, 0x91A9B7,
            &lv_font_montserrat_10);
-  drawText(canvas, width - 150, height - 18, 140, "Stanice: Dolni Vlkys",
-           0x91A9B7, &lv_font_montserrat_10, LV_TEXT_ALIGN_RIGHT);
+  drawText(canvas, width - 190, height - 18, 180,
+           "ADS-B: local + adsb.fi/adsb.lol", 0x91A9B7,
+           &lv_font_montserrat_10, LV_TEXT_ALIGN_RIGHT);
 }
 
 void drawAircraft(lv_obj_t* canvas, uint16_t* buffer, uint16_t width,
@@ -909,14 +910,18 @@ void drawAircraft(lv_obj_t* canvas, uint16_t* buffer, uint16_t width,
     if ((highlighted || labelsDrawn < 22) &&
         cx < static_cast<int>(width) - 12 && cy >= 8 &&
         cy < static_cast<int>(height) - 12) {
-      char label[32];
+      char label[40];
       const char* id = aircraft.flight[0] ? aircraft.flight : aircraft.hex;
-      if (aircraft.altitudeFt >= 0)
-        snprintf(label, sizeof(label), "%s %.0fk", id,
-                 aircraft.altitudeFt / 1000.0f);
-      else
-        snprintf(label, sizeof(label), "%s GND", id);
-      drawText(canvas, cx + (highlighted ? 17 : 9), cy - 8, 92, label,
+      const char* mlat = aircraft.mlatPosition ? " M" : "";
+      if (aircraft.onGround) {
+        snprintf(label, sizeof(label), "%s GND%s", id, mlat);
+      } else if (aircraft.altitudeFt >= 0) {
+        snprintf(label, sizeof(label), "%s %.0fk%s", id,
+                 aircraft.altitudeFt / 1000.0f, mlat);
+      } else {
+        snprintf(label, sizeof(label), "%s --%s", id, mlat);
+      }
+      drawText(canvas, cx + (highlighted ? 17 : 9), cy - 8, 100, label,
                0xFFFFFF, &lv_font_montserrat_10);
       if (!highlighted) ++labelsDrawn;
     }

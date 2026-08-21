@@ -446,7 +446,7 @@ void updateRuntimeDiagnostics() {
   const BarometerSnapshot& barometerData = barometer.snapshot();
 
   runtimeDiagnostics.uptimeMs = now;
-  runtimeDiagnostics.lastAdsbUpdateMs = lastAdsbUpdate;
+  runtimeDiagnostics.lastAdsbUpdateMs = adsb.lastSuccessMs();
   runtimeDiagnostics.lastRadarUpdateMs = lastRadarUpdate;
   runtimeDiagnostics.lastLightningUpdateMs = lightning.lastSuccessMs();
   runtimeDiagnostics.lastCurrentWeatherUpdateMs = lastCurrentWeatherUpdate;
@@ -461,6 +461,9 @@ void updateRuntimeDiagnostics() {
   runtimeDiagnostics.currentRadarFrame = radarFrame;
   runtimeDiagnostics.forecastSlotCount = weatherData.forecastSlotCount;
   runtimeDiagnostics.aircraftCount = aircraft.count;
+  runtimeDiagnostics.localAircraftCount = aircraft.localCount;
+  runtimeDiagnostics.adsbFiAircraftCount = aircraft.adsbFiCount;
+  runtimeDiagnostics.mlatAircraftCount = aircraft.mlatCount;
   runtimeDiagnostics.radarCacheReady = radar.animationCacheReady();
   runtimeDiagnostics.lightningReady = lightning.ready();
   runtimeDiagnostics.lightningStrikeCount = lightning.strikeCount();
@@ -702,9 +705,12 @@ void performInitialUpdates() {
   startupStatus("Pocitam Slunce, Mesic a astronomicke udaje...", 86);
   updateAstronomy();
 
-  startupStatus("Nacitam letouny ADS-B...", 91);
-  Serial.println("Loading local ADS-B aircraft.json...");
-  adsb.update();
+  startupStatus("Nacitam lokalni letouny ADS-B...", 91);
+  Serial.println("Loading local ADS-B; internet ADS-B starts after dashboard...");
+  // Never block the startup screen on an external HTTPS provider. Load the
+  // fast LAN receiver now; the normal 2 s ADS-B loop performs the first
+  // adsb.fi request after the dashboard is already running.
+  adsb.update(false);
   lastAdsbUpdate = millis();
 
 }

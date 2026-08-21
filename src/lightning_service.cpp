@@ -52,7 +52,7 @@ LightningService::~LightningService() {
 bool LightningService::begin() {
   strikes_ = static_cast<Strike*>(heap_caps_calloc(
       kMaxStrikes, sizeof(Strike), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-  jsonDoc_ = new DynamicJsonDocument(kJsonCapacity);
+  jsonDoc_ = new BasicJsonDocument<PsramAllocator>(kJsonCapacity);
 
   if (!strikes_ || !jsonDoc_) {
     snprintf(status_, sizeof(status_), "Blesky: malo RAM/PSRAM pro LightningMaps");

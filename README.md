@@ -1,6 +1,23 @@
+
+## ADS-B network reliability in 0.28.19
+
+The primary whole-country source remains `https://opendata.adsb.fi/api/v3/lat/.../lon/.../dist/...`. If that HTTPS request fails, the firmware tries the compatible `https://api.adsb.lol/v2/lat/.../lon/.../dist/...` endpoint. Large ADS-B caches and the LightningMaps JSON document are kept in PSRAM so the ESP32-S3 internal heap is left available for TLS/Wi-Fi. Diagnostics report DNS, HTTP error text and the age of the last **successful** ADS-B data rather than the last polling attempt.
+
 # Waveshare 7" Radar ČR + ADS-B + počasí
 
-Current firmware: **0.28.15-lightningmaps-buildfix**. Lightning now uses the viewport-filtered **LightningMaps plain-JSON WebSocket** at `wss://live2.lightningmaps.org/`. The old global Blitzortung `ws7/ws1/ws8` LZW decoder has been removed.
+## ADS-B hybrid: local + adsb.fi
+
+Od verze `0.28.20-adsb-local-buffered` zustava lokalni `aircraft.json` prioritnim
+zdrojem, ale mapa se doplnuje verejnym Open Data API `adsb.fi` pro stred CR
+(49.80 N, 15.35 E, polomer 180 NM). Duplicitni letouny se slucuji podle
+Mode-S/ICAO `hex`; lokalni poloha a rychlost maji prednost. Z adsb.fi se
+doplnuji i MLAT polohy. MLAT je v popisku letounu oznacen pismenem `M`.
+Dotaz na adsb.fi probiha nejvyse jednou za 5 sekund a vysledek se dale
+filtruje na aktualni rozsah mapy. Zdroj dat: https://adsb.fi/ (osobni,
+nekomercni Open Data pouziti podle podminek poskytovatele).
+
+
+Current firmware: **0.28.20-adsb-local-buffered**. Lightning now uses the viewport-filtered **LightningMaps plain-JSON WebSocket** at `wss://live2.lightningmaps.org/`. The old global Blitzortung `ws7/ws1/ws8` LZW decoder has been removed.
 
 ## 0.28.14 - LightningMaps plain JSON
 
@@ -49,7 +66,7 @@ Před finalizací se navíc porovná počet přijatých bajtů s velikostí soub
 Firmware pro původní desku **Waveshare ESP32-S3-Touch-LCD-7**
 (800 × 480, ST7262, GT911, CH422G, 8 MB OPI PSRAM).
 
-Aktuální verze: **0.28.15-lightningmaps-buildfix**
+Aktuální verze: **0.28.20-adsb-local-buffered**
 
 > Projekt není určen pro varianty 7B/7C bez úpravy ovladače displeje.
 

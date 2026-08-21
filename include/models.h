@@ -6,12 +6,17 @@
 struct Aircraft {
   char hex[9] = {0};
   char flight[13] = {0};
+  char registration[12] = {0};
+  char typeCode[8] = {0};
   float lat = NAN;
   float lon = NAN;
   float trackDeg = 0.0f;
   float groundSpeedKt = 0.0f;
   int32_t altitudeFt = -1;
   float seenPositionSec = 9999.0f;
+  bool onGround = false;
+  bool mlatPosition = false;
+  bool fromLocal = true;
 };
 
 constexpr size_t AIRCRAFT_ALERT_SLOT_COUNT = 3;
@@ -44,8 +49,11 @@ struct AircraftSnapshot {
   size_t count = 0;
   uint32_t generated = 0;
   bool valid = false;
-  char endpoint[48] = {0};
-  char status[80] = "ADSB: waiting";
+  size_t localCount = 0;
+  size_t adsbFiCount = 0;
+  size_t mlatCount = 0;
+  char endpoint[64] = {0};
+  char status[112] = "ADSB: waiting";
 };
 
 struct CurrentWeather {
@@ -144,6 +152,9 @@ struct RuntimeDiagnostics {
   size_t lightningStrikeCount = 0;
   uint8_t forecastSlotCount = 0;
   size_t aircraftCount = 0;
+  size_t localAircraftCount = 0;
+  size_t adsbFiAircraftCount = 0;
+  size_t mlatAircraftCount = 0;
   bool radarCacheReady = false;
   bool lightningReady = false;
   bool currentWeatherValid = false;
@@ -164,7 +175,7 @@ struct RuntimeDiagnostics {
   char timezone[12] = "CET/CEST";
   char radarStatus[112] = "Radar: waiting";
   char lightningStatus[112] = "Blesky: waiting";
-  char adsbStatus[80] = "ADSB: waiting";
+  char adsbStatus[112] = "ADSB: waiting";
   char weatherStatus[96] = "Weather: waiting";
   char astronomyStatus[48] = "Astronomy: waiting";
   char forecastProduct[16] = "--";

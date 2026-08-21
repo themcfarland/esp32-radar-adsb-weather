@@ -7,6 +7,7 @@
 
 #include "config.h"
 #include "map_viewport.h"
+#include "psram_allocator.h"
 
 
 class LightningService {
@@ -64,7 +65,7 @@ class LightningService {
 
   WebSocketsClient webSocket_;
   Strike* strikes_ = nullptr;
-  DynamicJsonDocument* jsonDoc_ = nullptr;
+  BasicJsonDocument<PsramAllocator>* jsonDoc_ = nullptr;
   size_t strikeCount_ = 0;
   size_t strikeWrite_ = 0;
 

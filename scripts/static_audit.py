@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Focused static audit for v0.28.15 LightningMaps build fix + plain-JSON realtime feed + robust OTA."""
+"""Focused static audit for v0.28.20 ADS-B local buffered + LightningMaps JSON + robust OTA."""
 from pathlib import Path
 import re
 import sys
@@ -42,8 +42,27 @@ ui_cpp = read("src/ui.cpp")
 patch = read("scripts/patch_display_driver.py")
 readme = read("README.md")
 
-require("0.28.15-lightningmaps-buildfix" in version,
-        "firmware version is not v0.28.15-lightningmaps-buildfix")
+require("0.28.20-adsb-local-buffered" in version,
+        "firmware version is not v0.28.20-adsb-local-buffered")
+require("ADSB_FI_BASE_URL" in config and "opendata.adsb.fi/api" in config and
+        "ADSB_FI_RADIUS_NM = 180" in config and
+        "ADSB_FI_REFRESH_MS = 10UL * 1000UL" in config,
+        "adsb.fi Czech-wide source configuration is missing")
+adsb_cpp = read("src/adsb_service.cpp")
+require("fetchAdsbFi" in adsb_cpp and "local + %s" in adsb_cpp and
+        "findAircraftByHex" in adsb_cpp and "mlatPosition" in adsb_cpp and
+        "BasicJsonDocument<PsramAllocator>" in adsb_cpp,
+        "hybrid local + adsb.fi merge/MLAT/PSRAM parsing is missing")
+
+network_block = adsb_cpp.split("bool AdsbService::fetchNetworkProvider", 1)[1].split("bool AdsbService::fetchAdsbFi", 1)[0]
+require("640U * 1024U" in network_block and "total=%u ac=%u" in network_block and
+        "client.setTimeout(15000)" in network_block and "http.useHTTP10(true)" not in network_block and
+        "downloadJsonBody" in adsb_cpp and "reinterpret_cast<char*>(body.data)" in network_block and
+        "adsb.update(false)" in main,
+        "ADS-B buffered HTTP/PSRAM startup-safe diagnostics are missing")
+require("MAX_AIRCRAFT = 180" in config and "adsbFiCount" in models and
+        "mlatCount" in models and "ADS-B: local + adsb.fi/adsb.lol" in map_cpp,
+        "expanded hybrid ADS-B model or map attribution is missing")
 require("showOtaScreen" in ui_cpp and "finishOtaScreen" in ui_cpp,
         "minimal OTA LCD screen is missing")
 progress_start = main.find("case OtaDisplayEvent::Progress:")
@@ -280,7 +299,7 @@ require("Vytvoril OK5TVR" in ui_cpp and
         "gStartupProgressFill" in ui_cpp,
         "animated startup screen or creator credit is missing")
 require("Pripravuji radarovou animaci v PSRAM" in main and
-        "Nacitam letouny ADS-B" in main and
+        "Nacitam lokalni letouny ADS-B" in main and
         "UI::showMainScreen()" in main,
         "startup progress stages or final transition are missing")
 require("gMainScreen = lv_obj_create(nullptr)" in ui_cpp,
@@ -497,4 +516,8 @@ print("Diagnostics: barometer, Zambretti and lightning status exposed on web")
 print("Display: conservative 20-line buffer, no periodic DMA watchdog")
 print("Radar: runtime PNG update remains RAM-only")
 print("Lightning: LightningMaps plain-JSON WSS, viewport-filtered independent 20 min live overlay")
+
+require("api.adsb.lol" in adsb_cpp, "adsb.lol fallback missing")
+require("WiFi.hostByName" in adsb_cpp, "ADS-B DNS diagnostic missing")
+require("HTTPClient::errorToString" in adsb_cpp, "ADS-B HTTP error text missing")
 print("OTA: browser firmware upload to dual OTA app partitions")

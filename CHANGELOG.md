@@ -1,3 +1,39 @@
+# 0.28.20-adsb-local-buffered
+
+- Fixed `adsb.fi JSON: IncompleteInput` after a valid HTTP 200 response by downloading the complete JSON body into PSRAM before ArduinoJson parsing.
+- The downloader verifies the declared Content-Length and reports received-byte progress/truncation/timeouts in Serial.
+- ADS-B network fetching no longer runs on the 91% startup screen; startup loads only local ADS-B and the first adsb.fi request runs after the dashboard is active.
+- Existing local + adsb.fi/adsb.lol merge, MLAT support, LightningMaps and OTA are unchanged.
+
+# 0.28.18-adsbfi-netfix
+
+- Opraveno diagnosticke `Stari ADS-B dat`: meri posledni uspesna data, ne posledni pokus o poll. Pri nulovych datech tedy spravne ukaze `dosud neprovedeno`.
+- LightningMaps ArduinoJson DOM 24 kB presunut z interni SRAM do PSRAM, aby zbylo vice souvisleho heapu pro soubezny TLS handshake ADS-B.
+- Dve velke ADS-B cache (`local` a sitova) presunuty do PSRAM; verejny slouceny snapshot zustava v interni pameti pro rychle kresleni.
+- Pred HTTPS dotazem se kontroluje DNS a do Serialu se vypisuje free/largest internal heap, PSRAM a rozresena IP.
+- HTTP chyby nyni obsahuji text `HTTPClient::errorToString`, takze `-1` uz neni anonymni.
+- Pokud adsb.fi selze, automaticky se zkusi kompatibilni fallback `api.adsb.lol/v2/lat/.../lon/.../dist/...`; adsb.fi zustava primarni zdroj.
+- Sitovy dotaz zpomalen na 10 s a cache prodlouzena na 30 s, aby se omezily soubezne TLS handshaky s LightningMaps WSS.
+
+# 0.28.17-adsbfi-robust
+
+- Opraveno nacitani adsb.fi pri velkem 180 NM dotazu: ArduinoJson dokument v PSRAM zvetsen ze 144 kB na 640 kB.
+- adsb.fi pouziva HTTP/1.1, delsi TLS/HTTP timeouty a vypisuje HTTP kod + Content-Length.
+- Chybejici volitelne `seen_pos` uz nezahodi jinak platnou pozici.
+- Serial diagnostika vypisuje `total/ac/accepted/missing/outside/stale`, aby bylo ihned videt, kde se letadla ztraceji.
+- Stav adsb.fi HTTP/JSON chyby je prenesen i do diagnostiky ADS-B.
+
+# 0.28.16-adsbfi-hybrid
+
+- ADS-B mapa je hybridni: lokalni `aircraft.json` + `https://opendata.adsb.fi/api/v3/lat/49.80/lon/15.35/dist/180`.
+- Lokalni prijem ma prioritu; duplicity se odstranuji podle ICAO/Mode-S `hex`.
+- adsb.fi se stahuje po 5 s a slouzi jako pokryti cele CR mimo dosah lokalni anteny.
+- Parsuji se ADS-B i MLAT pozice; MLAT letoun ma v mapovem popisku suffix `M`.
+- JSON pracovni dokument pro adsb.fi je alokovan v PSRAM a filtruje jen potrebna pole.
+- Cache dovoluje kratky vypadek jednoho zdroje bez zmizeni vsech letadel.
+- Maximalni pocet vykreslenych letounu zvysen z 80 na 180.
+- Zachovana LightningMaps JSON vrstva, lightning trail, 10 km alarm a stabilni OTA.
+
 # 0.28.15-lightningmaps-buildfix
 
 - Compile fix for arduinoWebSockets `sendTXT(String&)`: subscription String is now mutable instead of `const`.
