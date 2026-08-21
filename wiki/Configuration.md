@@ -28,6 +28,12 @@ HOME se používá pro:
 
 ## Datové zdroje
 
+### Lokální ADS-B přijímač
+
+Přepínač **Používat lokální ADS-B přijímač** určuje, zda se má firmware dotazovat na lokální `aircraft.json`. Při vypnutí zůstane URL uložená, ale nevznikají žádné lokální ADS-B HTTP požadavky; letadla se dál načítají z adsb.fi.
+
+Pokud je lokální přijímač zapnutý a 3 dotazy po sobě selžou, firmware přejde na 30 sekund do backoff režimu. Po úspěšném příjmu se automaticky vrátí k běžnému 2s intervalu.
+
 ### Lokální ADS-B URL
 
 Je volitelná. Příklad:

@@ -47,3 +47,8 @@ Aktuální OTA před zápisem vypíná podsvícení a do LVGL během flashován�
 ## BMP180 nenalezen
 
 Zkontrolujte 3V3/GND, SDA GPIO8, SCL GPIO9 a čip ID `0x55`. Nepoužívejte 5 V, pokud modul není pro 5 V jednoznačně určen.
+
+
+## Lokální ADS-B přijímač není dostupný
+
+Pokud lokální receiver nepoužíváte, vypněte v Nastavení volbu **Používat lokální ADS-B přijímač**. Uložená URL se zachová a provoz pro ČR dál dodává adsb.fi. Pokud je receiver pouze dočasně nedostupný, firmware po třech neúspěšných pokusech automaticky používá 30s backoff a po obnovení spojení se vrátí k běžnému intervalu.

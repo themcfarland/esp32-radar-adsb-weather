@@ -32,6 +32,10 @@ Pokud je blesk mladší než 10 minut do 10 km od HOME, aktivuje se červený ge
 
 > LightningMaps/Blitzortung realtime rozhraní není garantované stabilní veřejné API. Firmware proto obsahuje reconnect a watchdog.
 
+## Lokální ADS-B `aircraft.json`
+
+Lokální přijímač je volitelný a lze jej samostatně zapnout/vypnout ve webové konfiguraci. Při vypnutí se lokální URL nedotazuje. Při zapnutí má lokální poloha stejného ICAO letadla prioritu před internetovým zdrojem. Po 3 chybách se lokální polling automaticky zpomalí na jeden pokus za 30 s, dokud se receiver neobnoví.
+
 ## adsb.fi – ADS-B/MLAT
 
 Internetový provoz pro celou ČR se načítá z adsb.fi. Výřez je centrován přibližně na střed ČR s poloměrem 180 NM. Firmware parsuje jen údaje potřebné pro mapu a rozpoznává MLAT pozice.

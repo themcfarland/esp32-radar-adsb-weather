@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.29.2-local-adsb-control
+- Přidán webový přepínač **Používat lokální ADS-B přijímač**; při vypnutí se `aircraft.json` vůbec nedotazuje a uložená URL zůstává zachována.
+- Po 3 po sobě jdoucích chybách lokálního ADS-B se automaticky aktivuje 30s backoff; po úspěšném příjmu se obnoví standardní 2s polling.
+- Existující instalace s uloženou lokální ADS-B URL jsou při migraci automaticky ponechány se zapnutým lokálním přijímačem.
+- adsb.fi/MLAT zůstává funkční nezávisle na lokálním přijímači.
+
+
 ## 0.29.1-github-ready-cz-buildfix
 
 - Opraven build veřejné CZ verze: obnovena chybějící pomocná funkce `startupStatus()` v `src/main.cpp`.

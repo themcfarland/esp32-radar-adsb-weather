@@ -42,8 +42,8 @@ ui_cpp = read("src/ui.cpp")
 patch = read("scripts/patch_display_driver.py")
 readme = read("README.md")
 
-require("0.29.1-github-ready-cz-buildfix" in version,
-        "firmware version is not v0.29.1-github-ready-cz-buildfix")
+require("0.29.2-local-adsb-control" in version,
+        "firmware version is not v0.29.2-local-adsb-control")
 require("DEFAULT_HOME_LAT" in config and "DEFAULT_HOME_LON" in config and
         "home_lat" in device_cpp and "home_lon" in device_cpp and
         "settings_.homeLat" in device_cpp and "settings_.homeLon" in device_cpp,
@@ -64,6 +64,11 @@ require("fetchAdsbFi" in adsb_cpp and "local + %s" in adsb_cpp and
         "findAircraftByHex" in adsb_cpp and "mlatPosition" in adsb_cpp and
         "BasicJsonDocument<PsramAllocator>" in adsb_cpp,
         "hybrid local + adsb.fi merge/MLAT/PSRAM parsing is missing")
+require("adsb_local_enabled" in device_cpp and "adsb_local_on" in device_cpp and
+        "setLocalEnabled" in main and "ADSB_LOCAL_BACKOFF_AFTER_FAILURES = 3" in config and
+        "ADSB_LOCAL_FAILURE_BACKOFF_MS = 30UL * 1000UL" in config and
+        "consecutiveLocalFailures_" in adsb_cpp and "retry in %u s" in adsb_cpp,
+        "local ADS-B enable switch / 3-failure 30-second backoff is missing")
 
 network_block = adsb_cpp.split("bool AdsbService::fetchNetworkProvider", 1)[1].split("bool AdsbService::fetchAdsbFi", 1)[0]
 require("640U * 1024U" in network_block and "total=%u ac=%u" in network_block and

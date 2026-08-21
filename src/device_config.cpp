@@ -159,6 +159,13 @@ void DeviceConfigService::load() {
       settings_.wuApiKey = preferences.getString("wu_key", "");
       settings_.wuStationId = preferences.getString("wu_station", "");
       settings_.adsbUrl = preferences.getString("adsb_url", "");
+      // v0.29.2 adds an explicit local ADS-B switch. Existing installations
+      // that already have a local URL are migrated to enabled so their
+      // behaviour does not unexpectedly change after OTA.
+      settings_.localAdsbEnabled =
+          preferences.isKey("adsb_local_on")
+              ? preferences.getBool("adsb_local_on", false)
+              : !settings_.adsbUrl.isEmpty();
       settings_.homeLat = preferences.getFloat("home_lat", Config::DEFAULT_HOME_LAT);
       settings_.homeLon = preferences.getFloat("home_lon", Config::DEFAULT_HOME_LON);
       if (!isfinite(settings_.homeLat) || !isfinite(settings_.homeLon) ||
@@ -235,6 +242,7 @@ void DeviceConfigService::load() {
   }
   if (settings_.adsbUrl.isEmpty() && usableDefault(ADSB_AIRCRAFT_URL)) {
     settings_.adsbUrl = ADSB_AIRCRAFT_URL;
+    settings_.localAdsbEnabled = true;
   }
 }
 
@@ -477,6 +485,7 @@ bool DeviceConfigService::saveSettings() {
   preferences.putString("wu_key", settings_.wuApiKey);
   preferences.putString("wu_station", settings_.wuStationId);
   preferences.putString("adsb_url", settings_.adsbUrl);
+  preferences.putBool("adsb_local_on", settings_.localAdsbEnabled);
   preferences.putFloat("home_lat", settings_.homeLat);
   preferences.putFloat("home_lon", settings_.homeLon);
   preferences.putBool("layer_radar", settings_.radarLayerEnabled);
@@ -654,9 +663,11 @@ String DeviceConfigService::buildPage() const {
   page += String(settings_.homeLon, 5);
   page += F("'></div></div><p class='muted'>HOME poloha se pouziva pro znacku na mape, 10km bleskovy alarm, Open-Meteo a astronomicke vypocty. Ceska casova zona CET/CEST je nastavena automaticky.</p></section>");
 
-  page += F("<section class='card'><h2>Datove zdroje</h2><label for='adsb_url'>Lokalni ADS-B URL (aircraft.json) - volitelne</label><input id='adsb_url' name='adsb_url' maxlength='180' value='");
+  page += F("<section class='card'><h2>Datove zdroje</h2><label><input type='checkbox' name='adsb_local_enabled' value='1'");
+  if (settings_.localAdsbEnabled) page += F(" checked");
+  page += F(">Pouzivat lokalni ADS-B prijimac</label><label for='adsb_url'>Lokalni ADS-B URL (aircraft.json) - volitelne</label><input id='adsb_url' name='adsb_url' maxlength='180' value='");
   page += htmlEscape(settings_.adsbUrl);
-  page += F("' placeholder='http://192.168.1.100:8080/data/aircraft.json'><div class='row'><div><label for='wu_station'>WU stanice - volitelne</label><input id='wu_station' name='wu_station' maxlength='20' value='");
+  page += F("' placeholder='http://192.168.1.100:8080/data/aircraft.json'><p class='muted'>Pri vypnuti se lokalni prijimac vubec nedotazuje; URL zustane ulozena a adsb.fi dal poskytuje provoz pro celou CR. Pri zapnuti se po 3 po sobe jdoucich chybach lokalniho prijimace automaticky pouzije 30s backoff.</p><div class='row'><div><label for='wu_station'>WU stanice - volitelne</label><input id='wu_station' name='wu_station' maxlength='20' value='");
   page += htmlEscape(settings_.wuStationId);
   page += F("'></div><div><label for='wu_key'>Novy WU API klic - volitelne</label><input id='wu_key' name='wu_key' type='password' maxlength='96' placeholder='Prazdne = zachovat ulozeny klic'></div></div><p class='muted'>Bez lokalniho prijimace se letadla nacitaji z adsb.fi pro celou CR. Pokud lokalni aircraft.json zadate, ma prioritu a adsb.fi doplni provoz mimo jeho dosah vcetne MLAT. Aktualni pocasi i predpoved funguji bez uctu pres Open-Meteo; Weather Underground je volitelny zdroj vlastni PWS. Prazdna WU stanice WU vypne.</p></section>");
 
@@ -921,6 +932,7 @@ void DeviceConfigService::handleSave() {
   String newPassword = server_.arg("wifi_password");
   String newAdsbUrl = server_.arg("adsb_url");
   newAdsbUrl.trim();
+  const bool newLocalAdsbEnabled = server_.hasArg("adsb_local_enabled");
   String newStation = server_.arg("wu_station");
   newStation.trim();
   String newWuKey = server_.arg("wu_key");
@@ -981,6 +993,10 @@ void DeviceConfigService::handleSave() {
     sendErrorPage("ADSB URL musi zacinat http:// nebo https://, nebo muze byt prazdna.");
     return;
   }
+  if (newLocalAdsbEnabled && newAdsbUrl.isEmpty()) {
+    sendErrorPage("Pri zapnutem lokalnim ADS-B zadejte URL aircraft.json.");
+    return;
+  }
   bool anyAlertTarget = false;
   for (size_t slot = 0; slot < AIRCRAFT_ALERT_SLOT_COUNT; ++slot) {
     anyAlertTarget |= !newAlertTargets[slot].isEmpty();
@@ -997,6 +1013,7 @@ void DeviceConfigService::handleSave() {
   settings_.wifiSsid = newSsid;
   if (passwordChanged || ssidChanged) settings_.wifiPassword = newPassword;
   settings_.adsbUrl = newAdsbUrl;
+  settings_.localAdsbEnabled = newLocalAdsbEnabled;
   settings_.homeLat = newHomeLat;
   settings_.homeLon = newHomeLon;
   settings_.wuStationId = newStation;
@@ -1023,8 +1040,9 @@ void DeviceConfigService::handleSave() {
 
   runtimeSettingsChanged_ = true;
   DebugLog::printf(
-      "Config: saved, SSID=%s, home=%.5f,%.5f, layers=%s, alerts=%s [%s|%s|%s], barometer=%s alt=%.1f offset=%+.1f\n",
+      "Config: saved, SSID=%s, home=%.5f,%.5f, localADSB=%s, layers=%s, alerts=%s [%s|%s|%s], barometer=%s alt=%.1f offset=%+.1f\n",
       settings_.wifiSsid.c_str(), settings_.homeLat, settings_.homeLon,
+      settings_.localAdsbEnabled ? "on" : "off",
       layerSummary(settings_.radarLayerEnabled, settings_.lightningLayerEnabled,
                    settings_.adsbLayerEnabled).c_str(),
       settings_.aircraftAlertEnabled ? "on" : "off",

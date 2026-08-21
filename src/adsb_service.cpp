@@ -353,6 +353,7 @@ bool AdsbService::ensureCaches() {
 }
 
 uint32_t AdsbService::lastSuccessMs() const {
+  if (!localEnabled_) return lastAdsbFiSuccessMs_;
   if (lastLocalSuccessMs_ == 0U) return lastAdsbFiSuccessMs_;
   if (lastAdsbFiSuccessMs_ == 0U) return lastLocalSuccessMs_;
   return static_cast<int32_t>(lastLocalSuccessMs_ - lastAdsbFiSuccessMs_) > 0
@@ -373,10 +374,29 @@ bool AdsbService::update(bool includeNetwork) {
   // deliberately large (up to 180 aircraft), so it must never be allocated on
   // the Arduino loop-task stack. Successful fetches are copied into their
   // persistent caches, then snapshot_ is rebuilt by mergeCaches().
-  resetSnapshot(snapshot_);
-  if (fetchLocal(snapshot_)) {
-    *localCache_ = snapshot_;
-    lastLocalSuccessMs_ = nowMs;
+  const bool localAttemptDue =
+      nextLocalAttemptMs_ == 0U ||
+      static_cast<int32_t>(nowMs - nextLocalAttemptMs_) >= 0;
+  if (localEnabled_ && localAttemptDue) {
+    resetSnapshot(snapshot_);
+    if (fetchLocal(snapshot_)) {
+      *localCache_ = snapshot_;
+      lastLocalSuccessMs_ = nowMs;
+      if (consecutiveLocalFailures_ >= Config::ADSB_LOCAL_BACKOFF_AFTER_FAILURES) {
+        DebugLog::println("ADSB local: receiver restored; normal 2 s polling resumed");
+      }
+      consecutiveLocalFailures_ = 0;
+      nextLocalAttemptMs_ = 0;
+    } else {
+      if (consecutiveLocalFailures_ < 255U) ++consecutiveLocalFailures_;
+      if (consecutiveLocalFailures_ >= Config::ADSB_LOCAL_BACKOFF_AFTER_FAILURES) {
+        nextLocalAttemptMs_ = nowMs + Config::ADSB_LOCAL_FAILURE_BACKOFF_MS;
+        DebugLog::printf(
+            "ADSB local: %u consecutive failures; retry in %u s\n",
+            static_cast<unsigned>(consecutiveLocalFailures_),
+            static_cast<unsigned>(Config::ADSB_LOCAL_FAILURE_BACKOFF_MS / 1000UL));
+      }
+    }
   }
 
   if (includeNetwork &&
@@ -620,7 +640,8 @@ bool AdsbService::fetchAdsbFi(AircraftSnapshot& target) {
 
 void AdsbService::mergeCaches(uint32_t nowMs) {
   const bool localFresh =
-      localCache_ && cacheFresh(*localCache_, lastLocalSuccessMs_, nowMs,
+      localEnabled_ && localCache_ &&
+      cacheFresh(*localCache_, lastLocalSuccessMs_, nowMs,
                  Config::ADSB_LOCAL_CACHE_MAX_AGE_MS);
   const bool networkFresh =
       adsbFiCache_ && cacheFresh(*adsbFiCache_, lastAdsbFiSuccessMs_, nowMs,
@@ -629,7 +650,8 @@ void AdsbService::mergeCaches(uint32_t nowMs) {
   resetSnapshot(snapshot_);
   snapshot_.valid = localFresh || networkFresh;
   snapshot_.generated = static_cast<uint32_t>(time(nullptr));
-  snprintf(snapshot_.endpoint, sizeof(snapshot_.endpoint), "local + %s", networkSource_);
+  snprintf(snapshot_.endpoint, sizeof(snapshot_.endpoint),
+           localEnabled_ ? "local + %s" : "%s", networkSource_);
 
   if (localFresh) {
     for (size_t i = 0;

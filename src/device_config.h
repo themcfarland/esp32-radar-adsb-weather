@@ -33,6 +33,7 @@ struct DeviceSettings {
   String wuApiKey;
   String wuStationId;
   String adsbUrl;
+  bool localAdsbEnabled = false;
   float homeLat = Config::DEFAULT_HOME_LAT;
   float homeLon = Config::DEFAULT_HOME_LON;
   bool radarLayerEnabled = true;

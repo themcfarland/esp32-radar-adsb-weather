@@ -1,5 +1,12 @@
 # Historie verzí
 
+## 0.29.2-local-adsb-control
+
+- samostatné zapnutí/vypnutí lokálního ADS-B přijímače ve webu,
+- 3 chyby lokálního receiveru -> automatický 30s backoff,
+- adsb.fi/MLAT pokračuje i při vypnutém nebo nedostupném lokálním přijímači.
+
+
 ## 0.29.1-github-ready-cz-buildfix
 
 - Oprava kompilace veřejné CZ verze: obnovena funkce `startupStatus()` v `src/main.cpp`.

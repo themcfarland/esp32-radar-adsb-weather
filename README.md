@@ -1,6 +1,6 @@
 # Waveshare 7" Radar ČR + ADS-B + počasí
 
-Firmware **0.29.1-github-ready-cz-buildfix** je veřejná česká varianta projektu pro
+Firmware **0.29.2-local-adsb-control** je veřejná česká varianta projektu pro
 **Waveshare ESP32-S3-Touch-LCD-7 (800×480, ST7262, GT911, 8 MB OPI PSRAM)**.
 Po stažení z GitHubu neobsahuje osobní Wi-Fi, Weather Underground stanici ani
 lokální IP adresu ADS-B přijímače.
@@ -30,7 +30,11 @@ lokální IP adresu ADS-B přijímače.
 ## Volitelné zdroje
 
 ### Lokální ADS-B
-Pole `Lokalni ADS-B URL` může zůstat prázdné. Pak se používá pouze adsb.fi.
+Ve webovém nastavení je přepínač **Používat lokální ADS-B přijímač**. Je-li vypnutý, firmware lokální `aircraft.json` vůbec nedotazuje a používá pouze adsb.fi. URL může zůstat uložená pro pozdější použití.
+
+Při zapnutém lokálním přijímači se po **3 po sobě jdoucích chybách** aktivuje **30s backoff**, takže nedostupný receiver nezatěžuje hlavní smyčku opakovaným požadavkem každé 2 s.
+
+Pole `Lokalni ADS-B URL` může zůstat prázdné, pokud je lokální přijímač vypnutý. Pak se používá pouze adsb.fi.
 Pokud uživatel provozuje readsb/dump1090, může zadat například:
 
 ```text

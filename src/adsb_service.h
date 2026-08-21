@@ -13,10 +13,28 @@ class AdsbService {
   // interval. The public snapshot is a de-duplicated merge where local
   // receiver data always has priority for the same Mode-S/ICAO hex address.
   bool update(bool includeNetwork = true);
-  void setAircraftUrl(const String& aircraftUrl) { aircraftUrl_ = aircraftUrl; }
+  void setAircraftUrl(const String& aircraftUrl) {
+    if (aircraftUrl_ == aircraftUrl) return;
+    aircraftUrl_ = aircraftUrl;
+    consecutiveLocalFailures_ = 0;
+    nextLocalAttemptMs_ = 0;
+    lastLocalSuccessMs_ = 0;
+    if (localCache_) localCache_->valid = false;
+  }
+  void setLocalEnabled(bool enabled) {
+    if (localEnabled_ == enabled) return;
+    localEnabled_ = enabled;
+    consecutiveLocalFailures_ = 0;
+    nextLocalAttemptMs_ = 0;
+    lastLocalSuccessMs_ = 0;
+    if (localCache_) localCache_->valid = false;
+  }
+  bool localEnabled() const { return localEnabled_; }
   const AircraftSnapshot& snapshot() const { return snapshot_; }
   uint32_t lastSuccessMs() const;
-  uint32_t lastLocalSuccessMs() const { return lastLocalSuccessMs_; }
+  uint32_t lastLocalSuccessMs() const {
+    return localEnabled_ ? lastLocalSuccessMs_ : 0U;
+  }
   uint32_t lastNetworkSuccessMs() const { return lastAdsbFiSuccessMs_; }
 
  private:
@@ -28,6 +46,9 @@ class AdsbService {
   void mergeCaches(uint32_t nowMs);
 
   String aircraftUrl_;
+  bool localEnabled_ = false;
+  uint8_t consecutiveLocalFailures_ = 0;
+  uint32_t nextLocalAttemptMs_ = 0;
   AircraftSnapshot* localCache_ = nullptr;
   AircraftSnapshot* adsbFiCache_ = nullptr;
   AircraftSnapshot snapshot_;

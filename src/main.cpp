@@ -106,6 +106,7 @@ bool updateBarometerSample(uint32_t nowMs) {
 void applyDeviceSettings() {
   const DeviceSettings& settings = deviceConfig.settings();
   adsb.setAircraftUrl(settings.adsbUrl);
+  adsb.setLocalEnabled(settings.localAdsbEnabled);
   homeLat = settings.homeLat;
   homeLon = settings.homeLon;
   weather.setConfig(settings.wuApiKey, settings.wuStationId);
@@ -133,8 +134,9 @@ void applyDeviceSettings() {
     lvgl_port_unlock();
   }
   DebugLog::printf(
-      "Runtime config: HOME=%.5f,%.5f ADSB=%s WU=%s layers=radar:%d lightning:%d adsb:%d alerts=%s [%s|%s|%s] backlightSchedule=%s barometer=%s\n",
-      homeLat, homeLon, settings.adsbUrl.c_str(), settings.wuStationId.c_str(),
+      "Runtime config: HOME=%.5f,%.5f localADSB=%s ADSB=%s WU=%s layers=radar:%d lightning:%d adsb:%d alerts=%s [%s|%s|%s] backlightSchedule=%s barometer=%s\n",
+      homeLat, homeLon, settings.localAdsbEnabled ? "on" : "off",
+      settings.adsbUrl.c_str(), settings.wuStationId.c_str(),
       radarLayerEnabled ? 1 : 0, lightningLayerEnabled ? 1 : 0,
       adsbLayerEnabled ? 1 : 0,
       aircraftAlert.enabled ? "on" : "off", aircraftAlert.targets[0],
@@ -705,9 +707,11 @@ void performInitialUpdates() {
   updateAstronomy();
 
   startupStatus("Nacitam ADS-B data...", 91);
-  Serial.println(deviceConfig.settings().adsbUrl.isEmpty()
-                     ? "Local ADS-B not configured; adsb.fi starts after dashboard..."
-                     : "Loading local ADS-B; adsb.fi starts after dashboard...");
+  Serial.println(!deviceConfig.settings().localAdsbEnabled
+                     ? "Local ADS-B disabled; adsb.fi starts after dashboard..."
+                     : deviceConfig.settings().adsbUrl.isEmpty()
+                           ? "Local ADS-B enabled but URL is empty; adsb.fi starts after dashboard..."
+                           : "Loading local ADS-B; adsb.fi starts after dashboard...");
   // Never block the startup screen on an external HTTPS provider. Load the
   // fast LAN receiver now; the normal 2 s ADS-B loop performs the first
   // adsb.fi request after the dashboard is already running.
