@@ -73,6 +73,17 @@ bool otaScreenActive = false;
 uint32_t otaScreenDismissAt = 0;
 
 namespace {
+void startupStatus(const char* message, uint8_t progressPercent) {
+  if (!startupScreenActive) return;
+  lvgl_port_lock(-1);
+  UI::updateStartupStatus(message, progressPercent);
+  lvgl_port_unlock();
+  DebugLog::printf("STARTUP %u%%: %s\n",
+                   static_cast<unsigned>(progressPercent),
+                   message ? message : "");
+  delay(12);
+}
+
 bool updateBarometerSample(uint32_t nowMs) {
   const CurrentWeather& current = weather.snapshot().current;
   barometer.setWindDirection(current.valid ? current.windDirectionDeg : NAN);

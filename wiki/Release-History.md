@@ -1,5 +1,10 @@
 # Historie verzí
 
+## 0.29.1-github-ready-cz-buildfix
+
+- Oprava kompilace veřejné CZ verze: obnovena funkce `startupStatus()` v `src/main.cpp`.
+- Funkční logika `0.29.0-github-ready-cz` zůstává beze změny.
+
 ## 0.29.0-github-ready-cz
 
 První veřejná česká větev bez osobních výchozích údajů:

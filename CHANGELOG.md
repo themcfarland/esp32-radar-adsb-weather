@@ -1,3 +1,11 @@
+# Changelog
+
+## 0.29.1-github-ready-cz-buildfix
+
+- Opraven build veřejné CZ verze: obnovena chybějící pomocná funkce `startupStatus()` v `src/main.cpp`.
+- Funkce je znovu definována před `performInitialUpdates()` a `setup()`.
+- Beze změny logiky AP, HOME, ČHMÚ, LightningMaps, ADS-B a OTA.
+
 # 0.29.0-github-ready-cz
 
 - veřejná česká varianta bez osobních defaultů WU/ADS-B,

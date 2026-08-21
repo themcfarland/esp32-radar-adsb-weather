@@ -13,4 +13,4 @@
 
 ---
 
-Aktuální veřejná větev: **0.29.0-github-ready-cz**
+Aktuální veřejná větev: **0.29.1-github-ready-cz-buildfix**
