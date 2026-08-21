@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Focused static audit for v0.29.0 GitHub-ready CZ."""
+"""Focused static audit for v0.29.3 GitHub-ready CZ with five Wi-Fi profiles."""
 from pathlib import Path
 import re
 import sys
@@ -42,8 +42,8 @@ ui_cpp = read("src/ui.cpp")
 patch = read("scripts/patch_display_driver.py")
 readme = read("README.md")
 
-require("0.29.2-local-adsb-control" in version,
-        "firmware version is not v0.29.2-local-adsb-control")
+require("0.29.3-wifi-profiles" in version,
+        "firmware version is not v0.29.3-wifi-profiles")
 require("DEFAULT_HOME_LAT" in config and "DEFAULT_HOME_LON" in config and
         "home_lat" in device_cpp and "home_lon" in device_cpp and
         "settings_.homeLat" in device_cpp and "settings_.homeLon" in device_cpp,
@@ -69,6 +69,14 @@ require("adsb_local_enabled" in device_cpp and "adsb_local_on" in device_cpp and
         "ADSB_LOCAL_FAILURE_BACKOFF_MS = 30UL * 1000UL" in config and
         "consecutiveLocalFailures_" in adsb_cpp and "retry in %u s" in adsb_cpp,
         "local ADS-B enable switch / 3-failure 30-second backoff is missing")
+require("WIFI_PROFILE_COUNT = 5" in device_h and
+        "WifiProfile wifiProfiles[WIFI_PROFILE_COUNT]" in device_h and
+        "wifi_multi" in device_cpp and "wifi_ssid%u" in device_cpp and
+        "migrated legacy Wi-Fi to profile 1" in device_cpp and
+        "trying profile %u/%u" in device_cpp and
+        "Wi-Fi profile NVS read-back verification failed" in device_cpp and
+        "wifi_enabled_" in device_cpp and "Wi-Fi profily" in device_cpp,
+        "five-profile Wi-Fi storage/migration/failover UI is missing")
 
 network_block = adsb_cpp.split("bool AdsbService::fetchNetworkProvider", 1)[1].split("bool AdsbService::fetchAdsbFi", 1)[0]
 require("640U * 1024U" in network_block and "total=%u ac=%u" in network_block and

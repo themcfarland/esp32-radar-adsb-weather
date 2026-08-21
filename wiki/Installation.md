@@ -60,11 +60,11 @@ PASS: radarsetup
 IP:   192.168.4.1
 ```
 
-Po uložení Wi-Fi se zařízení restartuje a připojí do domácí sítě.
+Ve webu lze uložit až 5 Wi-Fi profilů. Po uložení se zařízení restartuje a připojí k první dostupné povolené síti.
 
 ## Failsafe Wi-Fi
 
-Pokud je uložené SSID/heslo chybné nebo router není dostupný, firmware po neúspěšném připojení znovu aktivuje konfigurační AP. Za běhu se Wi-Fi zkouší obnovovat každých přibližně 15 s; pokud se nepodaří reconnect, AP zůstane dostupné pro opravu nastavení.
+Pokud nefunguje žádný z až pěti povolených Wi-Fi profilů, firmware po neúspěšném připojení znovu aktivuje konfigurační AP. Za běhu se Wi-Fi zkouší obnovovat každých přibližně 15 s a profily se střídají; pokud se reconnect nepodaří, AP zůstane dostupné pro opravu nastavení.
 
 ## OTA
 

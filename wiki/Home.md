@@ -2,7 +2,7 @@
 
 Firmware pro **Waveshare ESP32-S3-Touch-LCD-7 (800×480, ST7262, GT911, CH422G, 8 MB flash / 8 MB OPI PSRAM)**. Česká veřejná větev je připravena tak, aby po stažení z GitHubu nebylo nutné upravovat osobní údaje ve zdrojovém kódu.
 
-**Aktuální veřejná verze:** `0.29.2-local-adsb-control`
+**Aktuální veřejná verze:** `0.29.3-wifi-profiles`
 
 > Projekt je určen pro původní Waveshare ESP32-S3-Touch-LCD-7. Varianty 7B/7C mohou vyžadovat jiný ovladač displeje.
 
@@ -28,7 +28,7 @@ Firmware pro **Waveshare ESP32-S3-Touch-LCD-7 (800×480, ST7262, GT911, CH422G, 
 2. Připojte se k síti `Radar-ADSB-Setup-XXXX`.
 3. Heslo je `radarsetup`.
 4. Otevřete `http://192.168.4.1/`.
-5. Zadejte Wi-Fi a vlastní **HOME latitude/longitude**.
+5. Nastavte jeden až pět Wi-Fi profilů a vlastní **HOME latitude/longitude**.
 6. Volitelně doplňte Weather Underground a lokální ADS-B URL.
 
 Podrobnosti: [[Installation]] a [[Configuration]].

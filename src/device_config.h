@@ -8,6 +8,7 @@
 #include "models.h"
 
 constexpr size_t BACKLIGHT_DAY_COUNT = 7;
+constexpr size_t WIFI_PROFILE_COUNT = 5;
 
 enum class OtaDisplayEvent : uint8_t {
   Start,
@@ -27,9 +28,14 @@ struct BacklightDaySchedule {
   uint16_t endMinutes = 23U * 60U;
 };
 
+struct WifiProfile {
+  bool enabled = false;
+  String ssid;
+  String password;
+};
+
 struct DeviceSettings {
-  String wifiSsid;
-  String wifiPassword;
+  WifiProfile wifiProfiles[WIFI_PROFILE_COUNT];
   String wuApiKey;
   String wuStationId;
   String adsbUrl;
@@ -95,6 +101,8 @@ class DeviceConfigService {
   String buildPage() const;
   String buildDiagnosticsPage() const;
   bool alertTargetPresent(size_t slot) const;
+  bool hasEnabledWifiProfile() const;
+  size_t enabledWifiProfileCount() const;
 
   DeviceSettings settings_;
   const AircraftSnapshot* aircraftSnapshot_ = nullptr;
@@ -118,4 +126,6 @@ class DeviceConfigService {
   int otaError_ = 0;
   uint32_t restartAt_ = 0;
   String accessPointSsid_;
+  int8_t activeWifiProfile_ = -1;
+  size_t nextWifiProfileIndex_ = 0;
 };

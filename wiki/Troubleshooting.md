@@ -14,9 +14,9 @@ Heslo:
 radarsetup
 ```
 
-Pokud je zařízení připojeno k domácí Wi-Fi, AP se automaticky vypíná. Při ztrátě Wi-Fi se po neúspěšném reconnectu znovu aktivuje.
+Pokud je zařízení připojeno k některému povolenému Wi-Fi profilu, AP se automaticky vypíná. Při ztrátě Wi-Fi firmware postupně zkouší uložené profily; po neúspěšném reconnectu se znovu aktivuje konfigurační AP.
 
-## Uložil jsem špatné heslo Wi-Fi
+## Uložil jsem špatné heslo nebo profil Wi-Fi
 
 Po restartu zařízení zkusí připojení. Když selže, vrátí se do konfiguračního AP. Připojte se na `192.168.4.1` a údaje opravte.
 

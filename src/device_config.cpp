@@ -154,8 +154,30 @@ void DeviceConfigService::load() {
   } else {
     const bool initialized = preferences.getBool("initialized", false);
     if (initialized) {
-      settings_.wifiSsid = preferences.getString("wifi_ssid", "");
-      settings_.wifiPassword = preferences.getString("wifi_pass", "");
+      const bool hasMultiWifi =
+          preferences.getBool("wifi_multi", false) ||
+          preferences.isKey("wifi_ssid0");
+      if (hasMultiWifi) {
+        for (size_t i = 0; i < WIFI_PROFILE_COUNT; ++i) {
+          char key[16];
+          snprintf(key, sizeof(key), "wifi_en%u", static_cast<unsigned>(i));
+          settings_.wifiProfiles[i].enabled = preferences.getBool(key, false);
+          snprintf(key, sizeof(key), "wifi_ssid%u", static_cast<unsigned>(i));
+          settings_.wifiProfiles[i].ssid = preferences.getString(key, "");
+          snprintf(key, sizeof(key), "wifi_pass%u", static_cast<unsigned>(i));
+          settings_.wifiProfiles[i].password = preferences.getString(key, "");
+        }
+      } else {
+        // Migration from firmware <= 0.29.2 which stored one Wi-Fi network.
+        const String legacySsid = preferences.getString("wifi_ssid", "");
+        const String legacyPassword = preferences.getString("wifi_pass", "");
+        if (!legacySsid.isEmpty()) {
+          settings_.wifiProfiles[0].enabled = true;
+          settings_.wifiProfiles[0].ssid = legacySsid;
+          settings_.wifiProfiles[0].password = legacyPassword;
+          DebugLog::println("Config: migrated legacy Wi-Fi to profile 1");
+        }
+      }
       settings_.wuApiKey = preferences.getString("wu_key", "");
       settings_.wuStationId = preferences.getString("wu_station", "");
       settings_.adsbUrl = preferences.getString("adsb_url", "");
@@ -222,8 +244,8 @@ void DeviceConfigService::load() {
           settings_.backlightDays[day].endMinutes = 23U * 60U;
       }
 
-      DebugLog::printf("Config: restored for SSID '%s', layers=%s\n",
-                       settings_.wifiSsid.c_str(),
+      DebugLog::printf("Config: restored, Wi-Fi profiles=%u, layers=%s\n",
+                       static_cast<unsigned>(enabledWifiProfileCount()),
                        layerSummary(settings_.radarLayerEnabled,
                                     settings_.lightningLayerEnabled,
                                     settings_.adsbLayerEnabled).c_str());
@@ -253,12 +275,12 @@ void DeviceConfigService::begin(const AircraftSnapshot* aircraftSnapshot,
   WiFi.persistent(false);
   WiFi.setHostname(Config::CONFIG_HOSTNAME);
 
-  if (!settings_.wifiSsid.isEmpty() && connectStation(12000)) {
-    DebugLog::printf("Config web on home network: %s\n", accessUrl().c_str());
+  if (hasEnabledWifiProfile() && connectStation(23000)) {
+    DebugLog::printf("Config web on Wi-Fi: %s\n", accessUrl().c_str());
   } else {
-    startAccessPoint(settings_.wifiSsid.isEmpty()
-                         ? "first setup"
-                         : "saved Wi-Fi connection failed");
+    startAccessPoint(hasEnabledWifiProfile()
+                         ? "all saved Wi-Fi profiles failed"
+                         : "first setup - no Wi-Fi profile enabled");
   }
   startWebServer();
 }
@@ -267,43 +289,104 @@ bool DeviceConfigService::stationConnected() const {
   return WiFi.status() == WL_CONNECTED;
 }
 
+bool DeviceConfigService::hasEnabledWifiProfile() const {
+  for (size_t i = 0; i < WIFI_PROFILE_COUNT; ++i) {
+    if (settings_.wifiProfiles[i].enabled &&
+        !settings_.wifiProfiles[i].ssid.isEmpty()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+size_t DeviceConfigService::enabledWifiProfileCount() const {
+  size_t count = 0;
+  for (size_t i = 0; i < WIFI_PROFILE_COUNT; ++i) {
+    if (settings_.wifiProfiles[i].enabled &&
+        !settings_.wifiProfiles[i].ssid.isEmpty()) {
+      ++count;
+    }
+  }
+  return count;
+}
+
 bool DeviceConfigService::connectStation(uint32_t timeoutMs) {
   if (stationConnected()) return true;
-  if (settings_.wifiSsid.isEmpty()) return false;
+  if (!hasEnabledWifiProfile()) return false;
 
   const wifi_mode_t mode = portalActive_ ? WIFI_AP_STA : WIFI_STA;
   WiFi.mode(mode);
   WiFi.setSleep(false);
-  WiFi.begin(settings_.wifiSsid.c_str(), settings_.wifiPassword.c_str());
-  DebugLog::printf("WiFi: connecting to %s\n", settings_.wifiSsid.c_str());
 
   const uint32_t started = millis();
-  while (!stationConnected() && millis() - started < timeoutMs) {
-    delay(100);
-  }
+  size_t visited = 0;
+  size_t index = nextWifiProfileIndex_ % WIFI_PROFILE_COUNT;
 
-  if (!stationConnected()) {
-    DebugLog::printf("WiFi: connection failed, status=%d\n",
+  while (visited < WIFI_PROFILE_COUNT && millis() - started < timeoutMs) {
+    const size_t profileIndex = index;
+    index = (index + 1U) % WIFI_PROFILE_COUNT;
+    ++visited;
+
+    const WifiProfile& profile = settings_.wifiProfiles[profileIndex];
+    if (!profile.enabled || profile.ssid.isEmpty()) continue;
+
+    const uint32_t elapsed = millis() - started;
+    if (elapsed >= timeoutMs) break;
+    const uint32_t remaining = timeoutMs - elapsed;
+    const uint32_t attemptMs = remaining < 4500U ? remaining : 4500U;
+    if (attemptMs < 500U) break;
+
+    WiFi.disconnect(false, false);
+    delay(40);
+    DebugLog::printf("WiFi: trying profile %u/%u SSID '%s'\n",
+                     static_cast<unsigned>(profileIndex + 1U),
+                     static_cast<unsigned>(WIFI_PROFILE_COUNT),
+                     profile.ssid.c_str());
+    WiFi.begin(profile.ssid.c_str(), profile.password.c_str());
+
+    const uint32_t attemptStarted = millis();
+    while (!stationConnected() && millis() - attemptStarted < attemptMs) {
+      const wl_status_t status = WiFi.status();
+      if (millis() - attemptStarted > 600U &&
+          (status == WL_NO_SSID_AVAIL || status == WL_CONNECT_FAILED)) {
+        break;
+      }
+      delay(100);
+    }
+
+    if (stationConnected()) {
+      activeWifiProfile_ = static_cast<int8_t>(profileIndex);
+      // Prefer the last successful profile first on the next reconnect.
+      nextWifiProfileIndex_ = profileIndex;
+      if (portalActive_) stopAccessPoint();
+      startMdns();
+      configTzTime(Config::TZ_INFO, "pool.ntp.org", "time.cloudflare.com");
+      DebugLog::printf(
+          "WiFi: connected using profile %u '%s', IP %s, config %s\n",
+          static_cast<unsigned>(profileIndex + 1U), profile.ssid.c_str(),
+          WiFi.localIP().toString().c_str(), accessUrl().c_str());
+      return true;
+    }
+
+    DebugLog::printf("WiFi: profile %u failed, status=%d\n",
+                     static_cast<unsigned>(profileIndex + 1U),
                      static_cast<int>(WiFi.status()));
-    return false;
+    WiFi.disconnect(false, false);
+    nextWifiProfileIndex_ = index;
   }
 
-  if (portalActive_) stopAccessPoint();
-  startMdns();
-  configTzTime(Config::TZ_INFO, "pool.ntp.org", "time.cloudflare.com");
-  DebugLog::printf("WiFi: connected, IP %s, config %s\n",
-                   WiFi.localIP().toString().c_str(), accessUrl().c_str());
-  return true;
+  activeWifiProfile_ = -1;
+  return false;
 }
 
 void DeviceConfigService::ensureNetwork(uint32_t timeoutMs) {
   if (stationConnected()) return;
-  if (settings_.wifiSsid.isEmpty()) {
-    if (!portalActive_) startAccessPoint("Wi-Fi is not configured");
+  if (!hasEnabledWifiProfile()) {
+    if (!portalActive_) startAccessPoint("no Wi-Fi profile is enabled");
     return;
   }
   if (!connectStation(timeoutMs) && !portalActive_) {
-    startAccessPoint("runtime Wi-Fi reconnect failed");
+    startAccessPoint("runtime Wi-Fi reconnect failed for saved profiles");
   }
 }
 
@@ -316,7 +399,7 @@ void DeviceConfigService::startAccessPoint(const char* reason) {
            static_cast<unsigned>(suffix));
   accessPointSsid_ = ssid;
 
-  WiFi.mode(settings_.wifiSsid.isEmpty() ? WIFI_AP : WIFI_AP_STA);
+  WiFi.mode(hasEnabledWifiProfile() ? WIFI_AP_STA : WIFI_AP);
   WiFi.setSleep(false);
   if (!WiFi.softAP(accessPointSsid_.c_str(), Config::CONFIG_AP_PASSWORD)) {
     DebugLog::println("Config AP: start failed");
@@ -430,6 +513,14 @@ void DeviceConfigService::loop() {
 String DeviceConfigService::networkLabel() const {
   if (stationConnected()) {
     String label = "WiFi ";
+    label += WiFi.SSID();
+    if (activeWifiProfile_ >= 0) {
+      label += " [profil ";
+      label += String(static_cast<unsigned>(activeWifiProfile_) + 1U);
+      label += "] ";
+    } else {
+      label += " ";
+    }
     label += String(WiFi.RSSI());
     label += " dBm ";
     label += WiFi.localIP().toString();
@@ -477,14 +568,41 @@ bool DeviceConfigService::saveSettings() {
   Preferences preferences;
   if (!preferences.begin(kPreferencesNamespace, false)) return false;
   bool ok = true;
+  auto putStringChecked = [&preferences](const char* key, const String& value) {
+    const size_t written = preferences.putString(key, value);
+    return value.isEmpty() || written > 0;
+  };
+
   ok &= preferences.putBool("initialized", true) > 0;
-  ok &= preferences.putString("wifi_ssid", settings_.wifiSsid) > 0;
-  // Empty passwords are valid for an open network; do not use the byte count
-  // as the success signal for this value.
-  preferences.putString("wifi_pass", settings_.wifiPassword);
-  preferences.putString("wu_key", settings_.wuApiKey);
-  preferences.putString("wu_station", settings_.wuStationId);
-  preferences.putString("adsb_url", settings_.adsbUrl);
+  ok &= preferences.putBool("wifi_multi", true) > 0;
+  for (size_t i = 0; i < WIFI_PROFILE_COUNT; ++i) {
+    char key[16];
+    snprintf(key, sizeof(key), "wifi_en%u", static_cast<unsigned>(i));
+    ok &= preferences.putBool(key, settings_.wifiProfiles[i].enabled) > 0;
+    snprintf(key, sizeof(key), "wifi_ssid%u", static_cast<unsigned>(i));
+    ok &= putStringChecked(key, settings_.wifiProfiles[i].ssid);
+    snprintf(key, sizeof(key), "wifi_pass%u", static_cast<unsigned>(i));
+    ok &= putStringChecked(key, settings_.wifiProfiles[i].password);
+  }
+
+  // Keep the first enabled profile in the legacy keys. This makes an OTA
+  // rollback to firmware <= 0.29.2 able to reconnect to at least one network.
+  String legacySsid;
+  String legacyPassword;
+  for (size_t i = 0; i < WIFI_PROFILE_COUNT; ++i) {
+    if (settings_.wifiProfiles[i].enabled &&
+        !settings_.wifiProfiles[i].ssid.isEmpty()) {
+      legacySsid = settings_.wifiProfiles[i].ssid;
+      legacyPassword = settings_.wifiProfiles[i].password;
+      break;
+    }
+  }
+  ok &= putStringChecked("wifi_ssid", legacySsid);
+  ok &= putStringChecked("wifi_pass", legacyPassword);
+
+  ok &= putStringChecked("wu_key", settings_.wuApiKey);
+  ok &= putStringChecked("wu_station", settings_.wuStationId);
+  ok &= putStringChecked("adsb_url", settings_.adsbUrl);
   preferences.putBool("adsb_local_on", settings_.localAdsbEnabled);
   preferences.putFloat("home_lat", settings_.homeLat);
   preferences.putFloat("home_lon", settings_.homeLon);
@@ -509,7 +627,29 @@ bool DeviceConfigService::saveSettings() {
     preferences.putUShort(key, settings_.backlightDays[day].endMinutes);
   }
   preferences.end();
-  return ok;
+  if (!ok) return false;
+
+  // Critical Wi-Fi data are read back before we report success. A corrupted or
+  // incomplete NVS write therefore cannot silently strand the device.
+  Preferences verify;
+  if (!verify.begin(kPreferencesNamespace, true)) return false;
+  bool wifiVerified = verify.getBool("wifi_multi", false);
+  for (size_t i = 0; i < WIFI_PROFILE_COUNT; ++i) {
+    char key[16];
+    snprintf(key, sizeof(key), "wifi_en%u", static_cast<unsigned>(i));
+    wifiVerified &=
+        verify.getBool(key, false) == settings_.wifiProfiles[i].enabled;
+    snprintf(key, sizeof(key), "wifi_ssid%u", static_cast<unsigned>(i));
+    wifiVerified &= verify.getString(key, "") == settings_.wifiProfiles[i].ssid;
+    snprintf(key, sizeof(key), "wifi_pass%u", static_cast<unsigned>(i));
+    wifiVerified &=
+        verify.getString(key, "") == settings_.wifiProfiles[i].password;
+  }
+  verify.end();
+  if (!wifiVerified) {
+    DebugLog::println("Config: Wi-Fi profile NVS read-back verification failed");
+  }
+  return wifiVerified;
 }
 
 bool DeviceConfigService::alertTargetPresent(size_t slot) const {
@@ -540,9 +680,9 @@ String DeviceConfigService::buildPage() const {
   page += F("main{max-width:820px;margin:auto}.card{background:#102433;border:1px solid #29495c;border-radius:12px;padding:16px;margin-bottom:14px}");
   page += F("h1{font-size:24px;margin:0 0 8px}h2{font-size:18px;margin:0 0 12px;color:#8bd5ff}");
   page += F("label{display:block;margin:12px 0 5px}input,select{width:100%;box-sizing:border-box;padding:11px;border-radius:8px;border:1px solid #456275;background:#071923;color:#fff}");
-  page += F("input[type=checkbox]{width:auto;margin-right:8px}.row{display:grid;grid-template-columns:1fr 1fr;gap:12px}.three{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}.schedule{width:100%;border-collapse:collapse}.schedule th,.schedule td{padding:7px;border-bottom:1px solid #29495c;text-align:left}.schedule input[type=time]{min-width:120px}");
+  page += F("input[type=checkbox]{width:auto;margin-right:8px}.row{display:grid;grid-template-columns:1fr 1fr;gap:12px}.three{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}.schedule{width:100%;border-collapse:collapse}.schedule th,.schedule td{padding:7px;border-bottom:1px solid #29495c;text-align:left}.schedule input[type=time]{min-width:120px}.wifi-profile{display:grid;grid-template-columns:110px 1fr 1fr;gap:10px;align-items:end;padding:10px 0;border-bottom:1px solid #29495c}.wifi-profile:last-child{border-bottom:0}.wifi-profile label{margin:0 0 5px}.wifi-enable{align-self:center;margin:0!important}.wifi-active{color:#6ee7a5;font-size:12px;display:block;margin-top:4px}");
   page += F("button{background:#1976a8;color:white;border:0;border-radius:8px;padding:11px 16px;font-size:15px;cursor:pointer}.small{padding:8px 10px;margin:8px 5px 0 0}.nav{display:inline-block;background:#214f68;color:#fff;text-decoration:none;border-radius:8px;padding:9px 13px}.danger{background:#a83a3a}.muted{color:#a7bac5;font-size:13px}.ok{color:#6ee7a5}.warn{color:#ffd166}");
-  page += F("code{background:#071923;padding:2px 5px;border-radius:4px}@media(max-width:700px){.row,.three{grid-template-columns:1fr}.schedule{font-size:13px}.schedule input[type=time]{min-width:92px;padding:8px}}</style></head><body><main>");
+  page += F("code{background:#071923;padding:2px 5px;border-radius:4px}@media(max-width:700px){.row,.three,.wifi-profile{grid-template-columns:1fr}.schedule{font-size:13px}.schedule input[type=time]{min-width:92px;padding:8px}}</style></head><body><main>");
   page += F("<h1>Radar CR + ADS-B</h1><p class='muted'>Firmware ");
   page += htmlEscape(FW_VERSION);
   page += F("</p><p><a class='nav' href='/diagnostics'>Diagnostika zarizeni</a></p><section class='card'><h2>Stav a pristup</h2><p>Sit: <strong>");
@@ -653,9 +793,36 @@ String DeviceConfigService::buildPage() const {
   }
   page += F("</select><button type='button' class='small assign' data-slot='1'>Pouzit jako letoun 1</button><button type='button' class='small assign' data-slot='2'>Pouzit jako letoun 2</button><button type='button' class='small assign' data-slot='3'>Pouzit jako letoun 3</button><p class='muted'>Zvyrazni se pouze symbol a kruh kolem letounu. Nevznika zvuk ani vyskakovaci okno. Pri vypnute ADS-B vrstve se symboly nezobrazuji.</p></section>");
 
-  page += F("<section class='card'><h2>Wi-Fi</h2><label for='wifi_ssid'>Nazev site (SSID)</label><input id='wifi_ssid' name='wifi_ssid' maxlength='32' required value='");
-  page += htmlEscape(settings_.wifiSsid);
-  page += F("'><label for='wifi_password'>Nove heslo</label><input id='wifi_password' name='wifi_password' type='password' maxlength='64' autocomplete='new-password' placeholder='Prazdne = zachovat stavajici heslo'><p class='muted'>Zmena SSID nebo zadani noveho hesla vyzaduje restart. Ostatni volby se pouziji okamzite.</p></section>");
+  page += F("<section class='card'><h2>Wi-Fi profily</h2><p class='muted'>Muzete ulozit az 5 siti pro ruzna mista. Zaskrtnute profily se zkouseji automaticky; prvni dostupna sit se pouzije. Pokud zadna nefunguje, spusti se konfiguracni AP.</p>");
+  for (size_t i = 0; i < WIFI_PROFILE_COUNT; ++i) {
+    const WifiProfile& profile = settings_.wifiProfiles[i];
+    page += F("<div class='wifi-profile'><div><label class='wifi-enable'><input type='checkbox' name='wifi_enabled_");
+    page += String(i + 1U);
+    page += F("' value='1'");
+    if (profile.enabled) page += F(" checked");
+    page += F(">Pouzit profil ");
+    page += String(i + 1U);
+    page += F("</label>");
+    if (stationConnected() && activeWifiProfile_ == static_cast<int8_t>(i)) {
+      page += F("<span class='wifi-active'>prave pripojeno</span>");
+    }
+    page += F("</div><div><label for='wifi_ssid_");
+    page += String(i + 1U);
+    page += F("'>SSID</label><input id='wifi_ssid_");
+    page += String(i + 1U);
+    page += F("' name='wifi_ssid_");
+    page += String(i + 1U);
+    page += F("' maxlength='32' value='");
+    page += htmlEscape(profile.ssid);
+    page += F("' placeholder='Nazev Wi-Fi site'></div><div><label for='wifi_password_");
+    page += String(i + 1U);
+    page += F("'>Nove heslo</label><input id='wifi_password_");
+    page += String(i + 1U);
+    page += F("' name='wifi_password_");
+    page += String(i + 1U);
+    page += F("' type='password' maxlength='64' autocomplete='new-password' placeholder='Prazdne = zachovat heslo'></div></div>");
+  }
+  page += F("<p class='muted'>Zmena profilu, SSID nebo hesla vyzaduje restart. Pri zmene SSID znamena prazdne heslo otevrenou sit. Pokud vypnete vsechny profily, zarizeni po restartu zustane v konfiguracnim AP.</p></section>");
 
   page += F("<section class='card'><h2>Poloha zarizeni</h2><div class='row'><div><label for='home_lat'>Zemepisna sirka</label><input id='home_lat' name='home_lat' type='number' min='48.30' max='51.30' step='0.00001' required value='");
   page += String(settings_.homeLat, 5);
@@ -927,9 +1094,41 @@ void DeviceConfigService::handleDiagnosticsJson() {
 }
 
 void DeviceConfigService::handleSave() {
-  String newSsid = server_.arg("wifi_ssid");
-  newSsid.trim();
-  String newPassword = server_.arg("wifi_password");
+  WifiProfile newWifiProfiles[WIFI_PROFILE_COUNT];
+  bool networkChanged = false;
+  for (size_t i = 0; i < WIFI_PROFILE_COUNT; ++i) {
+    const String suffix = String(i + 1U);
+    newWifiProfiles[i] = settings_.wifiProfiles[i];
+    newWifiProfiles[i].enabled = server_.hasArg(String("wifi_enabled_") + suffix);
+
+    String newSsid = server_.arg(String("wifi_ssid_") + suffix);
+    newSsid.trim();
+    const String submittedPassword =
+        server_.arg(String("wifi_password_") + suffix);
+    const bool ssidChanged = newSsid != settings_.wifiProfiles[i].ssid;
+
+    newWifiProfiles[i].ssid = newSsid;
+    if (ssidChanged) {
+      // A new SSID with an empty password represents an open network.
+      newWifiProfiles[i].password = submittedPassword;
+    } else if (!submittedPassword.isEmpty()) {
+      newWifiProfiles[i].password = submittedPassword;
+    }
+
+    if (newWifiProfiles[i].enabled && newWifiProfiles[i].ssid.isEmpty()) {
+      sendErrorPage(String("Aktivni Wi-Fi profil ") + suffix +
+                    " nema vyplnene SSID.");
+      return;
+    }
+    if (newWifiProfiles[i].ssid.isEmpty()) {
+      newWifiProfiles[i].password = "";
+    }
+
+    networkChanged |=
+        newWifiProfiles[i].enabled != settings_.wifiProfiles[i].enabled ||
+        newWifiProfiles[i].ssid != settings_.wifiProfiles[i].ssid ||
+        newWifiProfiles[i].password != settings_.wifiProfiles[i].password;
+  }
   String newAdsbUrl = server_.arg("adsb_url");
   newAdsbUrl.trim();
   const bool newLocalAdsbEnabled = server_.hasArg("adsb_local_enabled");
@@ -985,10 +1184,6 @@ void DeviceConfigService::handleSave() {
     }
   }
 
-  if (newSsid.isEmpty()) {
-    sendErrorPage("SSID nesmi byt prazdne.");
-    return;
-  }
   if (!newAdsbUrl.isEmpty() && !urlLooksValid(newAdsbUrl)) {
     sendErrorPage("ADSB URL musi zacinat http:// nebo https://, nebo muze byt prazdna.");
     return;
@@ -1006,12 +1201,9 @@ void DeviceConfigService::handleSave() {
     return;
   }
 
-  const bool ssidChanged = newSsid != settings_.wifiSsid;
-  const bool passwordChanged = !newPassword.isEmpty();
-  const bool networkChanged = ssidChanged || passwordChanged;
-
-  settings_.wifiSsid = newSsid;
-  if (passwordChanged || ssidChanged) settings_.wifiPassword = newPassword;
+  for (size_t i = 0; i < WIFI_PROFILE_COUNT; ++i) {
+    settings_.wifiProfiles[i] = newWifiProfiles[i];
+  }
   settings_.adsbUrl = newAdsbUrl;
   settings_.localAdsbEnabled = newLocalAdsbEnabled;
   settings_.homeLat = newHomeLat;
@@ -1040,8 +1232,8 @@ void DeviceConfigService::handleSave() {
 
   runtimeSettingsChanged_ = true;
   DebugLog::printf(
-      "Config: saved, SSID=%s, home=%.5f,%.5f, localADSB=%s, layers=%s, alerts=%s [%s|%s|%s], barometer=%s alt=%.1f offset=%+.1f\n",
-      settings_.wifiSsid.c_str(), settings_.homeLat, settings_.homeLon,
+      "Config: saved, Wi-Fi profiles=%u, home=%.5f,%.5f, localADSB=%s, layers=%s, alerts=%s [%s|%s|%s], barometer=%s alt=%.1f offset=%+.1f\n",
+      static_cast<unsigned>(enabledWifiProfileCount()), settings_.homeLat, settings_.homeLon,
       settings_.localAdsbEnabled ? "on" : "off",
       layerSummary(settings_.radarLayerEnabled, settings_.lightningLayerEnabled,
                    settings_.adsbLayerEnabled).c_str(),
@@ -1054,7 +1246,7 @@ void DeviceConfigService::handleSave() {
 
   if (networkChanged) {
     server_.send(200, "text/html; charset=utf-8",
-                 "<!doctype html><meta charset='utf-8'><meta name='viewport' content='width=device-width'><style>body{font-family:Arial;background:#07131c;color:white;padding:30px}</style><h1>Ulozeno</h1><p>Wi-Fi byla zmenena. Zarizeni se restartuje.</p>");
+                 "<!doctype html><meta charset='utf-8'><meta name='viewport' content='width=device-width'><style>body{font-family:Arial;background:#07131c;color:white;padding:30px}</style><h1>Ulozeno</h1><p>Wi-Fi profily byly zmeneny. Zarizeni se restartuje.</p>");
     restartPending_ = true;
     restartAt_ = millis() + 1200;
   } else {

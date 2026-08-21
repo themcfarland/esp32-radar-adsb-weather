@@ -1,5 +1,14 @@
 # Historie verzí
 
+## 0.29.3-wifi-profiles
+
+- až 5 uložených Wi-Fi profilů s individuálním checkboxem Použít,
+- automatický výběr první dostupné povolené sítě,
+- reconnect postupně přes všechny profily a preference posledního úspěšného,
+- automatická migrace původního jednoho SSID do profilu 1,
+- read-back kontrola kritických Wi-Fi údajů po zápisu do NVS,
+- failsafe konfigurační AP, pokud není dostupný žádný profil.
+
 ## 0.29.2-local-adsb-control
 
 - samostatné zapnutí/vypnutí lokálního ADS-B přijímače ve webu,

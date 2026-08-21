@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.29.3-wifi-profiles
+
+- Přidáno 5 Wi-Fi profilů (SSID, heslo, checkbox Použít).
+- Při startu se zkoušejí všechny povolené profily; použije se první dostupný.
+- Při reconnectu se jako první zkouší poslední úspěšný profil, poté ostatní.
+- Původní jedno-síťová konfigurace se automaticky migruje do profilu 1.
+- Kritické Wi-Fi záznamy se po uložení ověřují zpětným čtením z NVS.
+- Pokud žádný profil nefunguje, zůstává dostupný konfigurační AP.
+
 ## 0.29.2-local-adsb-control
 - Přidán webový přepínač **Používat lokální ADS-B přijímač**; při vypnutí se `aircraft.json` vůbec nedotazuje a uložená URL zůstává zachována.
 - Po 3 po sobě jdoucích chybách lokálního ADS-B se automaticky aktivuje 30s backoff; po úspěšném příjmu se obnoví standardní 2s polling.

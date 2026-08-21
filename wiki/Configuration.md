@@ -2,12 +2,21 @@
 
 Web je dostupný na IP adrese zařízení v domácí síti. Při prvním spuštění nebo při problému s Wi-Fi je dostupný na `http://192.168.4.1/` přes konfigurační AP.
 
-## Wi-Fi
+## Wi-Fi profily
 
-- SSID je povinné pro běžný online provoz.
-- Prázdné pole nového hesla zachová stávající heslo.
-- Změna SSID nebo hesla vyvolá restart.
-- Při neúspěšném připojení se znovu aktivuje konfigurační AP.
+Lze uložit až **5 Wi-Fi sítí** pro různá místa. Každý řádek obsahuje:
+
+- checkbox **Použít profil**,
+- SSID,
+- nové heslo.
+
+Povolené profily se při startu postupně zkoušejí a použije se první dostupná síť. Při výpadku Wi-Fi firmware profily znovu prochází; poslední úspěšný profil se zkouší jako první.
+
+Prázdné pole hesla u nezměněného SSID zachová stávající heslo. Při změně SSID znamená prázdné heslo otevřenou síť. Změna Wi-Fi profilů vyvolá restart.
+
+Pokud nejsou dostupné žádné povolené profily, spustí se konfigurační AP `Radar-ADSB-Setup-XXXX` na `192.168.4.1`. Je dovoleno vypnout i všech pět profilů; zařízení pak po restartu zůstane v konfiguračním AP.
+
+Při přechodu z firmware do 0.29.2 se původní jediná Wi-Fi automaticky migruje do profilu 1. Po uložení se kritické Wi-Fi údaje zpětně ověřují čtením z NVS.
 
 ## HOME poloha
 

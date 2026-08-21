@@ -13,4 +13,4 @@
 
 ---
 
-Aktuální veřejná větev: **0.29.2-local-adsb-control**
+Aktuální veřejná větev: **0.29.3-wifi-profiles**

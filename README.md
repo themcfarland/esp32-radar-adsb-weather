@@ -1,6 +1,6 @@
 # Waveshare 7" Radar ČR + ADS-B + počasí
 
-Firmware **0.29.2-local-adsb-control** je veřejná česká varianta projektu pro
+Firmware **0.29.3-wifi-profiles** je veřejná česká varianta projektu pro
 **Waveshare ESP32-S3-Touch-LCD-7 (800×480, ST7262, GT911, 8 MB OPI PSRAM)**.
 Po stažení z GitHubu neobsahuje osobní Wi-Fi, Weather Underground stanici ani
 lokální IP adresu ADS-B přijímače.
@@ -10,12 +10,18 @@ lokální IP adresu ADS-B přijímače.
 1. Nahrajte firmware do desky.
 2. Připojte se k AP `Radar-ADSB-Setup-XXXX`, heslo `radarsetup`.
 3. Otevřete `http://192.168.4.1/`.
-4. Zadejte Wi-Fi a **HOME latitude/longitude**.
+4. Nastavte až 5 Wi-Fi profilů (SSID/heslo + přepínač Použít) a **HOME latitude/longitude**.
 5. Ostatní zdroje jsou volitelné a nastavení se uloží do NVS.
 
 > Při aktualizaci ze starší větve 0.28.x zůstane staré NVS zachováno, ale
 > souřadnice HOME dříve nebyly uživatelským nastavením. Po prvním spuštění
 > verze 0.29.0 proto zkontrolujte a uložte vlastní latitude/longitude ve webu.
+
+## Více Wi-Fi míst
+
+Ve webovém nastavení lze uložit až **5 Wi-Fi profilů**. Každý profil má vlastní SSID, heslo a checkbox **Použít profil**. Firmware při startu i při pozdějším výpadku sítě postupně zkouší všechny povolené profily a připojí se k první dostupné síti. Poslední úspěšný profil se při dalším reconnectu zkouší jako první.
+
+Pokud není dostupný žádný povolený profil, zařízení spustí failsafe AP `Radar-ADSB-Setup-XXXX` na `192.168.4.1`. Starší jedno-síťové nastavení z verzí do 0.29.2 se při prvním startu automaticky převede do **profilu 1**. Kritické Wi-Fi údaje se po uložení zpětně načtou z NVS a ověří.
 
 ## Co funguje bez účtu
 
