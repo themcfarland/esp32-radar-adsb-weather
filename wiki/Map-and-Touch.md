@@ -1,48 +1,42 @@
-# Mapa a dotykové ovládání
+# Mapa a dotyk
 
-## Režimy výřezu
+## Rozložení
 
-Každé klepnutí do mapy přepne další režim:
+LCD má 800×480 px. Mapa zabírá přibližně 600×444 px a pravý informační panel 200 px.
 
-```text
-celá ČR → 50 km → 25 km → 10 km → celá ČR
-```
-
-Výřez se při přiblížení centruje na místo dotyku. Při návratu na celou ČR se obnoví pevný celostátní rozsah.
-
-## Uložení do NVS
-
-Namespace:
+Pevný český výřez:
 
 ```text
-mapview
+lon 11.70 ... 19.00
+lat 48.30 ... 51.30
 ```
 
-Ukládané hodnoty:
+## Vrstvy
 
-```text
-mode
-lat
-lon
-```
+Pořadí je zjednodušeně:
 
-Zápis se provede až po krátké prodlevě od posledního klepnutí. Tím se omezuje opotřebení flash paměti.
+1. základní mapa,
+2. radar ČHMÚ,
+3. LightningMaps,
+4. hranice/města/HOME,
+5. ADS-B letadla a popisky,
+6. UI.
 
-## Společný viewport
+## Zoom
 
-Stejné geografické hranice používají:
+Dotykem lze přepínat:
 
-- radar,
-- hranice České republiky,
-- města,
-- stanice Dolní Vlkys,
-- letadla ADS-B,
-- geografická síť.
+- celá ČR,
+- 50 km,
+- 25 km,
+- 10 km.
 
-## Obrys České republiky
+Lokální zoomy se centrovají kolem HOME. Poslední výřez lze uložit do NVS.
 
-Obrys pochází z geoBoundaries CZE ADM0 a je redukován na 300 bodů. Zdrojový zjednodušený GeoJSON je uložen v:
+## Blesky
 
-```text
-data/czech_border_300.geojson
-```
+Čerstvý zásah je kreslen jako malý blesk, starší stopa menšími barevnými body/kříži. To omezuje falešný dojem svislých linií při husté bouřkové aktivitě.
+
+## ADS-B
+
+Letadla jsou kreslena podle latitude/longitude a tracku. MLAT lze v popisku odlišit. Duplicitní ICAO z lokálního receiveru a adsb.fi se sloučí s prioritou lokálního zdroje.

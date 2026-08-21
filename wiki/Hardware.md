@@ -2,33 +2,36 @@
 
 ## Podporovaná deska
 
-Firmware je určen pro původní Waveshare ESP32-S3-Touch-LCD-7:
-
-- ESP32-S3,
-- LCD 800 × 480,
-- řadič ST7262,
-- kapacitní dotyk GT911,
+- Waveshare ESP32-S3-Touch-LCD-7,
+- 800×480,
+- LCD ST7262,
+- dotyk GT911,
 - IO expander CH422G,
 - 8 MB flash,
 - 8 MB OPI PSRAM.
 
-Varianty 7B a 7C mohou používat jiný hardware nebo ovladač a nejsou podporované bez úpravy projektu.
+Projekt je laděn pro původní variantu. Verze 7B/7C nemusí být bez změny display driveru kompatibilní.
 
-## Napájení a USB
+## BMP180
 
-Při nahrávání použijte kvalitní datový USB kabel. Při nestabilním startu nebo starém posunutém obrazu proveďte úplné vypnutí a opětovné zapnutí napájení.
-
-## Test displeje
-
-PlatformIO prostředí:
+Podporovaný barometr je BMP180 na adrese `0x77`.
 
 ```text
-waveshare-display-test
+BMP180      Waveshare
+VCC/VIN     3V3
+GND         GND
+SDA         GPIO8
+SCL         GPIO9
 ```
 
-ověří:
+I2C0 je sdílená s GT911 a CH422G. Firmware proto nepouští samostatné `Wire.begin()` na stejné piny, ale pracuje s již inicializovaným ESP-IDF I2C0.
 
-- detekovanou velikost flash a PSRAM,
-- rozlišení 800 × 480,
-- základní vykreslení,
-- dotyk GT911.
+Při správné detekci se v Serial Monitoru objeví:
+
+```text
+Barometer: BMP180 detected on shared ESP-IDF I2C0 at 0x77, chip ID 0x55
+```
+
+## Lokální ADS-B přijímač
+
+Není povinný. Může to být například readsb/dump1090 na Raspberry Pi/Orange Pi nebo jiném zařízení v LAN. Firmware potřebuje URL vedoucí na `aircraft.json`.

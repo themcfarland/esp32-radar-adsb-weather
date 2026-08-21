@@ -1,55 +1,49 @@
-# Řešení problémů
+# Troubleshooting
 
-## Serial Monitor nic nevypisuje
+## Nevidím konfigurační AP
 
-- nastavte 115200 baud,
-- zavřete a znovu otevřete monitor po resetu,
-- ověřte správný USB port,
-- zkuste nativní USB CDC i UART0 podle zapojení desky.
-
-## Displej je posunutý nebo cyklicky ujíždí
-
-- proveďte `pio run -t clean`,
-- ověřte hlášení o bounce bufferu 20 řádků,
-- nemaňte runtime pixel clock,
-- po nahrání proveďte úplný power-cycle,
-- ověřte, že nejde o variantu 7B/7C.
-
-## Předpověď nefunguje
-
-V Serial Monitoru hledejte:
+Očekávané SSID:
 
 ```text
-Forecast Open-Meteo: HTTP 200
-Forecast: OK, source=Open-Meteo, cards=6
+Radar-ADSB-Setup-XXXX
 ```
 
-WU `HTTP 401` znamená, že klíč nemá přístup k hodinovému TWC produktu. Open-Meteo má přesto fungovat samostatně.
+Heslo:
 
-## Aktuální PWS data nefungují
-
-- zkontrolujte WU API klíč,
-- zkontrolujte ID stanice,
-- ověřte Wi-Fi a správný čas.
-
-## ADS-B se nezobrazuje
-
-- otevřete `aircraft.json` v prohlížeči ve stejné síti,
-- ověřte IP adresu a port,
-- zkontrolujte VLAN, firewall a izolaci Wi-Fi klientů,
-- odpověď musí obsahovat pole `aircraft`.
-
-## Build hlásí Network.h
-
-Použijte projektový `platformio.ini`, který má:
-
-```ini
-lib_ldf_mode = deep
-lib_compat_mode = soft
+```text
+radarsetup
 ```
 
-Nepřepínejte projekt na starou standardní platformu Arduino-ESP32 2.x.
+Pokud je zařízení připojeno k domácí Wi-Fi, AP se automaticky vypíná. Při ztrátě Wi-Fi se po neúspěšném reconnectu znovu aktivuje.
 
-## Po restartu se obnoví špatný výřez
+## Uložil jsem špatné heslo Wi-Fi
 
-NVS používá namespace `mapview`. Pro návrat na celou ČR několikrát klepněte do mapy, dokud se nezobrazí `MAPA: CELA CR`; po krátké prodlevě se tento stav uloží.
+Po restartu zařízení zkusí připojení. Když selže, vrátí se do konfiguračního AP. Připojte se na `192.168.4.1` a údaje opravte.
+
+## `ADSB local: HTTP -11`
+
+`-11` odpovídá timeoutu při čtení. Ověřte URL lokálního `aircraft.json` v browseru a LAN dostupnost přijímače. Internetová adsb.fi vrstva může fungovat i bez lokálního receiveru.
+
+## adsb.fi HTTP 200, ale JSON je neúplný
+
+Firmware používá PSRAM body buffer a až poté JSON parser. Pokud Serial ukazuje timeout při těle HTTP, jde o síťový/TLS přenos, nikoli o neplatnou API URL.
+
+## `setSocketOption(): Bad file number`
+
+Tato hláška se může objevit po uzavření síťového socketu v Arduino-ESP32. Pokud následující request a funkce normálně pokračují, nejde sama o sobě o fatální chybu.
+
+## LightningMaps je připojeno, ale nejsou blesky
+
+Feed může legitimně vracet prázdné `strokes`. Diagnostika rozlišuje živý JSON stream od samotné přítomnosti blesků. Při zastavení platných rámců watchdog spojení obnoví.
+
+## Blesky vypadají jako svislé čáry
+
+Aktuální větev používá plain JSON LightningMaps a blesky kreslí nezávisle na radarových snímcích. Čerstvý zásah je blesk, starší stopa je menší bod/kříž. Pokud se problém vrátí, porovnejte `lat/lon/id` ze Serial logu se zdrojem LightningMaps.
+
+## OTA se nahraje, ale displej během zápisu vypadá špatně
+
+Aktuální OTA před zápisem vypíná podsvícení a do LVGL během flashování nesahá. Používejte firmware z aktuální větve 0.29.x nebo novější.
+
+## BMP180 nenalezen
+
+Zkontrolujte 3V3/GND, SDA GPIO8, SCL GPIO9 a čip ID `0x55`. Nepoužívejte 5 V, pokud modul není pro 5 V jednoznačně určen.

@@ -1,11 +1,16 @@
-**ESP32 Radar + ADS-B**
+**ESP32 Radar ČR**
 
 - [[Home]]
 - [[Installation]]
-- [[Hardware]]
 - [[Configuration]]
-- [[Map-and-Touch]]
-- [[Data-Sources]]
+- [[Hardware]]
 - [[Architecture]]
+- [[Data-Sources]]
+- [[Map-and-Touch]]
+- [[OTA-and-Diagnostics]]
 - [[Troubleshooting]]
 - [[Release-History]]
+
+---
+
+Aktuální veřejná větev: **0.29.0-github-ready-cz**

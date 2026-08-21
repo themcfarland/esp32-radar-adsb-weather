@@ -1,33 +1,28 @@
 # Historie verzí
 
-## 0.16.0
+## 0.29.0-github-ready-cz
 
-- dotykové režimy celá ČR, 50 km, 25 km a 10 km,
-- střed podle místa dotyku,
-- uložení režimu a středu do NVS,
-- obnovení po restartu.
+První veřejná česká větev bez osobních výchozích údajů:
 
-## 0.15.0
+- HOME latitude/longitude v NVS a webu,
+- Open-Meteo jako plnohodnotný základ bez účtu,
+- Weather Underground volitelně,
+- lokální ADS-B volitelně,
+- adsb.fi pro celou ČR,
+- LightningMaps plain JSON,
+- 10km bleskový alarm,
+- stabilní OTA s blackoutem displeje,
+- česká mapa a CET/CEST.
 
-- skutečný obrys ČR z geoBoundaries,
-- 300 bodů pro rozumný kompromis detailu a výkonu.
+## Vývojová řada 0.28.x
 
-## 0.13.0
+Významné milníky:
 
-- oprava Open-Meteo HTTP odpovědi,
-- Open-Meteo jako primární forecast,
-- časové body +3 až +48 hodin.
+- `0.28.0-altitude-calibration` – kalibrace barometrické výšky,
+- `0.28.5` až `0.28.9` – stabilizace web OTA a restartu,
+- `0.28.10` – nová ikona blesku,
+- `0.28.12` – blesky nezávislé na radarové animaci,
+- `0.28.14/15` – přechod na LightningMaps plain JSON,
+- `0.28.16–0.28.20` – hybridní lokální ADS-B + adsb.fi, PSRAM/buffered HTTP úpravy.
 
-## 0.12.0
-
-- rozšířená sériová diagnostika.
-
-## 0.9.0
-
-- hodinový forecast do 48 hodin.
-
-## 0.7.0
-
-- stabilnější RGB panel,
-- 20řádkový bounce buffer,
-- radarová cache v PSRAM.
+Podrobné změny jsou v kořenovém `CHANGELOG.md` repozitáře.

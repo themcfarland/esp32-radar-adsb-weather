@@ -1,39 +1,80 @@
-# Konfigurace
+# Webové nastavení
 
-## Soubor secrets.h
+Web je dostupný na IP adrese zařízení v domácí síti. Při prvním spuštění nebo při problému s Wi-Fi je dostupný na `http://192.168.4.1/` přes konfigurační AP.
 
-Soubor vytvořte z `include/secrets.example.h`:
+## Wi-Fi
 
-```cpp
-#define WIFI_SSID          "NAZEV_WIFI"
-#define WIFI_PASSWORD      "HESLO_WIFI"
-#define WU_API_KEY         "WEATHER_UNDERGROUND_API_KEY"
-#define WU_STATION_ID      "IPLZE179"
-#define ADSB_AIRCRAFT_URL  "http://192.168.1.100:8080/data/aircraft.json"
-```
+- SSID je povinné pro běžný online provoz.
+- Prázdné pole nového hesla zachová stávající heslo.
+- Změna SSID nebo hesla vyvolá restart.
+- Při neúspěšném připojení se znovu aktivuje konfigurační AP.
 
-`include/secrets.h` je v `.gitignore`.
+## HOME poloha
 
-## Hlavní konstanty v config.h
-
-- rozlišení a rozměry panelů,
-- geografický rozsah celé mapy ČR,
-- kalibrace radarového PNG,
-- interval ADS-B 2 s,
-- radar 5 min,
-- PWS 5 min,
-- forecast 1 h,
-- astronomické údaje 1 min,
-- maximální počet letadel 80.
-
-## Záložní souřadnice
-
-Pokud PWS nevrátí souřadnice, firmware použije `FALLBACK_LAT` a `FALLBACK_LON` v `include/config.h`.
-
-## Časové pásmo
-
-Firmware používá české časové pásmo s automatickým přechodem CET/CEST:
+Uživatel nastaví latitude a longitude v rozsahu české mapy:
 
 ```text
-CET-1CEST,M3.5.0/2,M10.5.0/3
+lat: 48.30 až 51.30
+lon: 11.70 až 19.00
 ```
+
+HOME se používá pro:
+
+- značku HOME,
+- 10km bleskový alarm,
+- Open-Meteo,
+- astronomii,
+- výchozí střed lokálních zoomů.
+
+## Datové zdroje
+
+### Lokální ADS-B URL
+
+Je volitelná. Příklad:
+
+```text
+http://192.168.1.100:8080/data/aircraft.json
+```
+
+Pokud je prázdná, používá se pouze adsb.fi. Pokud je vyplněná, lokální data mají prioritu a internetový feed doplňuje vzdálenější letadla a MLAT.
+
+### Weather Underground
+
+`WU station` a `WU API key` jsou volitelné. Bez nich funguje aktuální počasí i předpověď přes Open-Meteo. Při dostupném WU firmware preferuje vlastní PWS pro aktuální podmínky.
+
+## Vrstvy mapy
+
+Samostatně lze zapnout/vypnout:
+
+- radar ČHMÚ,
+- LightningMaps LIVE,
+- ADS-B.
+
+## Zvýraznění letadel
+
+Lze definovat až tři cíle podle callsignu nebo ICAO hex a graficky je zvýraznit na mapě.
+
+## Podsvícení
+
+Každý den týdne může mít vlastní čas zapnutí/vypnutí. Zhasnutý displej lze dočasně probudit dotykem.
+
+## BMP180 a Zambretti
+
+Lze nastavit:
+
+- povolení barometru,
+- nadmořskou výšku senzoru,
+- jemnou korekci MSL tlaku.
+
+Web obsahuje pomocnou kalibraci nadmořské výšky z aktuálního naměřeného tlaku a referenčního tlaku z dostupného zdroje počasí.
+
+## Servisní funkce
+
+Web nabízí:
+
+- `/diagnostics` – diagnostika,
+- `/api/diagnostics` – JSON diagnostika,
+- restart zařízení,
+- LCD resync,
+- factory reset,
+- OTA firmware.
