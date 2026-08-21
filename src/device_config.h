@@ -4,6 +4,7 @@
 #include <DNSServer.h>
 #include <WebServer.h>
 
+#include "config.h"
 #include "models.h"
 
 constexpr size_t BACKLIGHT_DAY_COUNT = 7;
@@ -32,6 +33,8 @@ struct DeviceSettings {
   String wuApiKey;
   String wuStationId;
   String adsbUrl;
+  float homeLat = Config::DEFAULT_HOME_LAT;
+  float homeLon = Config::DEFAULT_HOME_LON;
   bool radarLayerEnabled = true;
   bool lightningLayerEnabled = true;
   bool adsbLayerEnabled = true;

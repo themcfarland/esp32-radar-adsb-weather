@@ -2,8 +2,8 @@
 import math
 
 EARTH_KM = 6371.0088
-HOME_LAT = 49.7863
-HOME_LON = 13.2850
+HOME_LAT = 49.8175
+HOME_LON = 15.4730
 
 def distance_km(lat1, lon1, lat2, lon2):
     lat1r = math.radians(lat1)

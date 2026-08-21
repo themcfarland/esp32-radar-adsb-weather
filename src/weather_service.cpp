@@ -116,25 +116,39 @@ bool WeatherService::update() {
 }
 
 bool WeatherService::updateCurrent() {
-  if (!hasUsableWuKey() || stationId_.isEmpty()) {
+  if (WiFi.status() != WL_CONNECTED) {
     snapshot_.current.valid = false;
-    strlcpy(snapshot_.status, "PWS key/station not configured",
-            sizeof(snapshot_.status));
-    DebugLog::println("PWS current: skipped - WU key or station ID is missing");
+    strlcpy(snapshot_.status, "Weather: WiFi offline", sizeof(snapshot_.status));
     return false;
   }
 
-  DebugLog::println("PWS current: request started");
-  const bool ok = fetchCurrent();
-  if (ok) {
-    snprintf(snapshot_.status, sizeof(snapshot_.status), "PWS OK | forecast %s",
-             snapshot_.forecastValid ? snapshot_.forecastProduct : "--");
-    DebugLog::printf("PWS current: OK, %.1f C\n",
-                     snapshot_.current.temperatureC);
+  if (hasUsableWuKey() && !stationId_.isEmpty()) {
+    DebugLog::println("PWS current: request started");
+    if (fetchCurrent()) {
+      snprintf(snapshot_.status, sizeof(snapshot_.status), "PWS OK | forecast %s",
+               snapshot_.forecastValid ? snapshot_.forecastProduct : "--");
+      DebugLog::printf("PWS current: OK, %.1f C\n", snapshot_.current.temperatureC);
+      return true;
+    }
+    DebugLog::printf("PWS current: failed (%s), trying Open-Meteo current\n",
+                     snapshot_.status);
   } else {
-    DebugLog::printf("PWS current: failed, status=%s\n", snapshot_.status);
+    DebugLog::println("Current weather: WU not configured, using Open-Meteo");
   }
-  return ok;
+
+  int openMeteoCode = 0;
+  if (fetchOpenMeteoCurrent(openMeteoCode)) {
+    snprintf(snapshot_.status, sizeof(snapshot_.status), "Open-Meteo current OK | forecast %s",
+             snapshot_.forecastValid ? snapshot_.forecastProduct : "--");
+    DebugLog::printf("Open-Meteo current: OK, %.1f C\n",
+                     snapshot_.current.temperatureC);
+    return true;
+  }
+
+  snapshot_.current.valid = false;
+  snprintf(snapshot_.status, sizeof(snapshot_.status), "Current weather OM HTTP %d",
+           openMeteoCode);
+  return false;
 }
 
 bool WeatherService::updateForecast() {
@@ -188,9 +202,70 @@ bool WeatherService::fetchCurrent() {
   snapshot_.current.epoch = obs["epoch"] | 0;
   snapshot_.current.valid = true;
 
-  snapshot_.stationLat = obs["lat"] | Config::FALLBACK_LAT;
-  snapshot_.stationLon = obs["lon"] | Config::FALLBACK_LON;
   return true;
+}
+
+bool WeatherService::fetchOpenMeteoCurrent(int& httpCode) {
+  const String latitude = String(snapshot_.stationLat, 5);
+  const String longitude = String(snapshot_.stationLon, 5);
+  const String url =
+      "https://api.open-meteo.com/v1/forecast?latitude=" + latitude +
+      "&longitude=" + longitude +
+      "&current=temperature_2m,relative_humidity_2m,precipitation,rain,pressure_msl,wind_speed_10m,wind_direction_10m,wind_gusts_10m"
+      "&wind_speed_unit=kmh&timeformat=unixtime&timezone=GMT";
+
+  DebugLog::printf("Current Open-Meteo: request started for %s,%s\n",
+                   latitude.c_str(), longitude.c_str());
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  http.useHTTP10(true);
+  http.setConnectTimeout(7000);
+  http.setTimeout(18000);
+  if (!http.begin(client, url)) {
+    httpCode = -1;
+    return false;
+  }
+  http.addHeader("Accept-Encoding", "identity");
+  httpCode = http.GET();
+  if (httpCode != HTTP_CODE_OK) {
+    http.end();
+    return false;
+  }
+
+  const String payload = http.getString();
+  http.end();
+  if (payload.isEmpty()) {
+    httpCode = -2;
+    return false;
+  }
+
+  DynamicJsonDocument doc(6 * 1024);
+  const DeserializationError err = deserializeJson(doc, payload);
+  if (err) {
+    DebugLog::printf("Current Open-Meteo: JSON error %s\n", err.c_str());
+    httpCode = -2;
+    return false;
+  }
+
+  JsonObjectConst current = doc["current"];
+  if (current.isNull()) {
+    httpCode = -3;
+    return false;
+  }
+
+  snapshot_.current.temperatureC = current["temperature_2m"] | NAN;
+  snapshot_.current.humidityPct = current["relative_humidity_2m"] | NAN;
+  snapshot_.current.pressureHpa = current["pressure_msl"] | NAN;
+  snapshot_.current.windKph = current["wind_speed_10m"] | NAN;
+  snapshot_.current.gustKph = current["wind_gusts_10m"] | NAN;
+  snapshot_.current.windDirectionDeg = current["wind_direction_10m"] | NAN;
+  float rain = current["rain"] | NAN;
+  if (!isfinite(rain)) rain = current["precipitation"] | NAN;
+  snapshot_.current.rainRateMmH = rain;
+  snapshot_.current.epoch = current["time"] | static_cast<uint32_t>(time(nullptr));
+  snapshot_.current.valid = isfinite(snapshot_.current.temperatureC);
+  return snapshot_.current.valid;
 }
 
 void WeatherService::clearForecast() {

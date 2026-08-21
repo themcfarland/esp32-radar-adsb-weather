@@ -724,7 +724,7 @@ bool begin() {
   lv_obj_set_pos(current, 4, 4);
   lv_obj_set_size(current, 192, 82);
   applyPanelStyle(current, kCardBg, 7, kCardBorder, 1);
-  makeLabel(current, 9, 5, 174, "Dolni Vlkys  |  IPLZE179",
+  makeLabel(current, 9, 5, 174, "POCASI  |  HOME",
             &lv_font_montserrat_12, 0x83CFF4);
   gCurrentTemp = makeLabel(current, 9, 24, 78, "--.- C",
                            &lv_font_montserrat_24, 0xFFFFFF);

@@ -43,9 +43,10 @@ constexpr char RADAR_BASE_URL[] =
 constexpr char RADAR_INDEX_URL[] =
     "https://opendata.chmi.cz/meteorology/weather/radar/composite/maxz/png_masked/";
 
-// Used only if the station response does not contain coordinates.
-constexpr float FALLBACK_LAT = 49.7863f;
-constexpr float FALLBACK_LON = 13.2850f;
+// Generic Czech-Republic default used only before the first-run form is saved.
+// The real HOME position is user-configurable and stored in NVS.
+constexpr float DEFAULT_HOME_LAT = 49.8175f;
+constexpr float DEFAULT_HOME_LON = 15.4730f;
 
 // Lightning trail colours are evaluated against real current time. The same
 // realtime lightning overlay remains visible while CHMI radar frames animate.

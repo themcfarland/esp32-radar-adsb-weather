@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Focused static audit for v0.28.20 ADS-B local buffered + LightningMaps JSON + robust OTA."""
+"""Focused static audit for v0.29.0 GitHub-ready CZ."""
 from pathlib import Path
 import re
 import sys
@@ -42,8 +42,19 @@ ui_cpp = read("src/ui.cpp")
 patch = read("scripts/patch_display_driver.py")
 readme = read("README.md")
 
-require("0.28.20-adsb-local-buffered" in version,
-        "firmware version is not v0.28.20-adsb-local-buffered")
+require("0.29.0-github-ready-cz" in version,
+        "firmware version is not v0.29.0-github-ready-cz")
+require("DEFAULT_HOME_LAT" in config and "DEFAULT_HOME_LON" in config and
+        "home_lat" in device_cpp and "home_lon" in device_cpp and
+        "settings_.homeLat" in device_cpp and "settings_.homeLon" in device_cpp,
+        "user-configurable HOME position is missing")
+settings_defaults = read("include/settings_defaults.h")
+require('#define WU_STATION_ID ""' in settings_defaults and
+        '#define ADSB_AIRCRAFT_URL ""' in settings_defaults,
+        "public defaults still contain private WU/ADS-B values")
+require("fetchOpenMeteoCurrent" in weather_cpp and
+        "Current weather: WU not configured, using Open-Meteo" in weather_cpp,
+        "account-free Open-Meteo current weather fallback is missing")
 require("ADSB_FI_BASE_URL" in config and "opendata.adsb.fi/api" in config and
         "ADSB_FI_RADIUS_NM = 180" in config and
         "ADSB_FI_REFRESH_MS = 10UL * 1000UL" in config,
@@ -104,7 +115,7 @@ require("LIGHTNING_ALERT_RADIUS_KM = 10.0f" in config and
         "10 km / 10 min lightning proximity alert constants are missing")
 require("recentStrikeWithin" in lightning_h and
         "greatCircleDistanceKm" in lightning_cpp and
-        "recentStrikeWithin(Config::FALLBACK_LAT, Config::FALLBACK_LON" in main,
+        "recentStrikeWithin(homeLat, homeLon" in main,
         "realtime lightning proximity detection is missing")
 require("LIGHTNING_TRAIL_WHITE_MAX_AGE_SEC = 2UL * 60UL" in config and
         "LIGHTNING_TRAIL_YELLOW_MAX_AGE_SEC = 5UL * 60UL" in config and
@@ -187,7 +198,7 @@ require("kTrendWindowMs - Config::PRESSURE_HISTORY_STEP_MS" in barometer_cpp,
         "near-three-hour minimum trend collection interval is missing")
 require("toSeaLevelPressure" in barometer_cpp and
         "selectReductionTemperature" in barometer_cpp and
-        "WU prumer 12 h" in barometer_cpp and
+        "venkovni prumer 12 h" in barometer_cpp and
         "powf(base, -5.257f)" in barometer_cpp and "barometerAltitudeM" in device_h,
         "WU-temperature-aware sea-level pressure conversion is missing")
 require("setOutdoorTemperature" in barometer_h and
@@ -299,7 +310,7 @@ require("Vytvoril OK5TVR" in ui_cpp and
         "gStartupProgressFill" in ui_cpp,
         "animated startup screen or creator credit is missing")
 require("Pripravuji radarovou animaci v PSRAM" in main and
-        "Nacitam lokalni letouny ADS-B" in main and
+        "Nacitam ADS-B data" in main and
         "UI::showMainScreen()" in main,
         "startup progress stages or final transition are missing")
 require("gMainScreen = lv_obj_create(nullptr)" in ui_cpp,
@@ -508,10 +519,10 @@ print("Target: Waveshare ESP32-S3-Touch-LCD-7 800x480")
 print("Startup: animated status screen, progress and OK5TVR credit")
 print("Forecast: three internet cards at +3/+6/+9 h")
 print("Barometer: BMP180 on shared ESP-IDF I2C0 address 0x77")
-print("Pressure: WU 12 h outdoor-temperature reduction with 15 C fallback")
+print("Pressure: 12 h outdoor-temperature reduction with 15 C fallback")
 print("History: 1 min samples, 5 min RAM points, 24 h sea-level chart")
 print("Trend: 3 h regression from unreduced station pressure")
-print("Zambretti: A-Z codes, season and optional WU wind correction")
+print("Zambretti: A-Z codes, season and optional weather wind correction")
 print("Diagnostics: barometer, Zambretti and lightning status exposed on web")
 print("Display: conservative 20-line buffer, no periodic DMA watchdog")
 print("Radar: runtime PNG update remains RAM-only")

@@ -31,6 +31,8 @@ bool radarLayerEnabled = true;
 bool lightningLayerEnabled = true;
 bool adsbLayerEnabled = true;
 bool lightningProximityAlertActive = false;
+float homeLat = Config::DEFAULT_HOME_LAT;
+float homeLon = Config::DEFAULT_HOME_LON;
 Preferences mapPreferences;
 MapViewport mapViewport;
 RuntimeDiagnostics runtimeDiagnostics;
@@ -64,33 +66,13 @@ bool backlightTemporaryWake = false;
 uint32_t backlightWakeUntil = 0;
 bool barometerInitialized = false;
 String barometerWuStationId;
+float barometerWeatherLat = NAN;
+float barometerWeatherLon = NAN;
 bool startupScreenActive = false;
 bool otaScreenActive = false;
 uint32_t otaScreenDismissAt = 0;
 
 namespace {
-bool isUnsetValue(const String& value) {
-  return value.isEmpty() || value.indexOf("YOUR_") >= 0 ||
-         value.indexOf("CHANGE_ME") >= 0;
-}
-
-void startupStatus(const char* message, uint8_t progressPercent) {
-  if (!startupScreenActive) return;
-  lvgl_port_lock(-1);
-  UI::updateStartupStatus(message, progressPercent);
-  lvgl_port_unlock();
-  DebugLog::printf("STARTUP %u%%: %s\n",
-                   static_cast<unsigned>(progressPercent),
-                   message ? message : "");
-  delay(12);
-}
-
-bool weatherConfigured() {
-  const DeviceSettings& settings = deviceConfig.settings();
-  return !isUnsetValue(settings.wuApiKey) &&
-         !settings.wuStationId.isEmpty();
-}
-
 bool updateBarometerSample(uint32_t nowMs) {
   const CurrentWeather& current = weather.snapshot().current;
   barometer.setWindDirection(current.valid ? current.windDirectionDeg : NAN);
@@ -113,11 +95,20 @@ bool updateBarometerSample(uint32_t nowMs) {
 void applyDeviceSettings() {
   const DeviceSettings& settings = deviceConfig.settings();
   adsb.setAircraftUrl(settings.adsbUrl);
+  homeLat = settings.homeLat;
+  homeLon = settings.homeLon;
   weather.setConfig(settings.wuApiKey, settings.wuStationId);
-  if (barometerWuStationId != settings.wuStationId) {
+  weather.setLocation(homeLat, homeLon);
+  const bool weatherLocationChanged =
+      !isfinite(barometerWeatherLat) || !isfinite(barometerWeatherLon) ||
+      fabsf(barometerWeatherLat - homeLat) > 0.00001f ||
+      fabsf(barometerWeatherLon - homeLon) > 0.00001f;
+  if (barometerWuStationId != settings.wuStationId || weatherLocationChanged) {
     barometer.clearOutdoorTemperatureHistory();
     barometerWuStationId = settings.wuStationId;
-    DebugLog::println("Barometer: WU temperature history cleared after station change");
+    barometerWeatherLat = homeLat;
+    barometerWeatherLon = homeLon;
+    DebugLog::println("Barometer: outdoor temperature history cleared after weather location/source change");
   }
   aircraftAlert = deviceConfig.alertConfig();
   radarLayerEnabled = settings.radarLayerEnabled;
@@ -131,8 +122,8 @@ void applyDeviceSettings() {
     lvgl_port_unlock();
   }
   DebugLog::printf(
-      "Runtime config: ADSB=%s WU=%s layers=radar:%d lightning:%d adsb:%d alerts=%s [%s|%s|%s] backlightSchedule=%s barometer=%s\n",
-      settings.adsbUrl.c_str(), settings.wuStationId.c_str(),
+      "Runtime config: HOME=%.5f,%.5f ADSB=%s WU=%s layers=radar:%d lightning:%d adsb:%d alerts=%s [%s|%s|%s] backlightSchedule=%s barometer=%s\n",
+      homeLat, homeLon, settings.adsbUrl.c_str(), settings.wuStationId.c_str(),
       radarLayerEnabled ? 1 : 0, lightningLayerEnabled ? 1 : 0,
       adsbLayerEnabled ? 1 : 0,
       aircraftAlert.enabled ? "on" : "off", aircraftAlert.targets[0],
@@ -159,7 +150,7 @@ void loadMapViewport() {
   mapPreferencesReady = mapPreferences.begin("mapview", false);
   if (!mapPreferencesReady) {
     mapViewport = MapRenderer::makeViewport(
-        MapZoomMode::Full, Config::FALLBACK_LAT, Config::FALLBACK_LON,
+        MapZoomMode::Full, homeLat, homeLon,
         Config::MAP_W, Config::MAP_H);
     DebugLog::println("Map view: NVS unavailable, using full Czech Republic");
     return;
@@ -168,9 +159,9 @@ void loadMapViewport() {
   const MapZoomMode mode =
       storedZoomMode(mapPreferences.getUChar("mode", 0));
   const float centerLat =
-      mapPreferences.getFloat("lat", Config::FALLBACK_LAT);
+      mapPreferences.getFloat("lat", homeLat);
   const float centerLon =
-      mapPreferences.getFloat("lon", Config::FALLBACK_LON);
+      mapPreferences.getFloat("lon", homeLon);
   mapViewport = MapRenderer::makeViewport(mode, centerLat, centerLon,
                                           Config::MAP_W, Config::MAP_H);
   DebugLog::printf("Map view restored: %s center %.5f, %.5f\n",
@@ -645,7 +636,7 @@ void redrawMap() {
   // inside the real 10 km radius around the home/station position.
   lightningProximityAlertActive =
       lightningLayerEnabled &&
-      lightning.recentStrikeWithin(Config::FALLBACK_LAT, Config::FALLBACK_LON,
+      lightning.recentStrikeWithin(homeLat, homeLon,
                                    Config::LIGHTNING_ALERT_RADIUS_KM,
                                    Config::LIGHTNING_ALERT_MAX_AGE_SEC);
 
@@ -654,7 +645,8 @@ void redrawMap() {
   MapRenderer::drawReference(canvas, buffer, Config::MAP_W,
                              Config::MAP_H, mapViewport,
                              radarLayerEnabled, lightningLayerEnabled,
-                             adsbLayerEnabled, lightningProximityAlertActive);
+                             adsbLayerEnabled, lightningProximityAlertActive,
+                             homeLat, homeLon);
   if (adsbLayerEnabled) {
     MapRenderer::drawAircraft(canvas, buffer, Config::MAP_W, Config::MAP_H,
                               adsb.snapshot(), mapViewport, aircraftAlert);
@@ -683,12 +675,8 @@ void performInitialUpdates() {
   }
 
   DebugLog::println("Initial weather update started");
-  startupStatus("Nacitam aktualni pocasi z Weather Underground...", 68);
-  if (weatherConfigured()) {
-    weather.updateCurrent();
-  } else {
-    DebugLog::println("PWS current skipped: WU key is not configured");
-  }
+  startupStatus("Nacitam aktualni pocasi (Open-Meteo / WU)...", 68);
+  weather.updateCurrent();
   // Forecast always runs. WU is attempted when a key is present and
   // Open-Meteo remains available without a WU subscription.
   startupStatus("Nacitam predpoved +3 / +6 / +9 hodin...", 75);
@@ -705,8 +693,10 @@ void performInitialUpdates() {
   startupStatus("Pocitam Slunce, Mesic a astronomicke udaje...", 86);
   updateAstronomy();
 
-  startupStatus("Nacitam lokalni letouny ADS-B...", 91);
-  Serial.println("Loading local ADS-B; internet ADS-B starts after dashboard...");
+  startupStatus("Nacitam ADS-B data...", 91);
+  Serial.println(deviceConfig.settings().adsbUrl.isEmpty()
+                     ? "Local ADS-B not configured; adsb.fi starts after dashboard..."
+                     : "Loading local ADS-B; adsb.fi starts after dashboard...");
   // Never block the startup screen on an external HTTPS provider. Load the
   // fast LAN receiver now; the normal 2 s ADS-B loop performs the first
   // adsb.fi request after the dashboard is already running.
@@ -722,10 +712,10 @@ void setup() {
   setenv("TZ", Config::TZ_INFO, 1);
   tzset();
   printHardwareInfo();
-  loadMapViewport();
   deviceConfig.setOtaDisplayCallback(handleOtaDisplayEvent);
   deviceConfig.load();
   applyDeviceSettings();
+  loadMapViewport();
 
   if (!psramFound() || ESP.getPsramSize() < 7UL * 1024UL * 1024UL) {
     Serial.println("Fatal: 8 MB OPI PSRAM is not available. Check PlatformIO memory_type=qio_opi.");
@@ -872,7 +862,7 @@ void loop() {
   // the ten-minute warning window elapsed.
   const bool proximityAlertNow =
       lightningLayerEnabled &&
-      lightning.recentStrikeWithin(Config::FALLBACK_LAT, Config::FALLBACK_LON,
+      lightning.recentStrikeWithin(homeLat, homeLon,
                                    Config::LIGHTNING_ALERT_RADIUS_KM,
                                    Config::LIGHTNING_ALERT_MAX_AGE_SEC);
   if (proximityAlertNow != lightningProximityAlertActive) {
@@ -893,8 +883,17 @@ void loop() {
     const bool previousRadarLayer = radarLayerEnabled;
     const bool previousLightningLayer = lightningLayerEnabled;
     const bool previousAdsbLayer = adsbLayerEnabled;
+    const float previousHomeLat = homeLat;
+    const float previousHomeLon = homeLon;
     const AircraftAlertConfig previousAlert = aircraftAlert;
     applyDeviceSettings();
+    const bool homeChanged = fabsf(previousHomeLat - homeLat) > 0.00001f ||
+                             fabsf(previousHomeLon - homeLon) > 0.00001f;
+    if (homeChanged) {
+      lastCurrentWeatherUpdate = 0;
+      lastForecastUpdate = 0;
+      lastAstronomyUpdate = 0;
+    }
     updateBarometerSample(now);
     lastBarometerUpdate = now;
     updatePressureUi();
@@ -906,7 +905,8 @@ void loop() {
     }
     if (previousRadarLayer != radarLayerEnabled ||
         previousLightningLayer != lightningLayerEnabled ||
-        previousAdsbLayer != adsbLayerEnabled || alertDisplayChanged) {
+        previousAdsbLayer != adsbLayerEnabled || alertDisplayChanged ||
+        homeChanged) {
       mapDirty = true;
     }
 
@@ -946,7 +946,7 @@ void loop() {
   const bool manualRefresh = UI::consumeManualRefresh();
   if (manualRefresh && deviceConfig.stationConnected()) {
     DebugLog::println("Manual refresh requested");
-    if (weatherConfigured()) weather.updateCurrent();
+    weather.updateCurrent();
     weather.updateForecast();
     updateWeatherUi();
     updateAstronomy();
@@ -987,7 +987,7 @@ void loop() {
 
   }
 
-  if (weatherConfigured() && deviceConfig.stationConnected() &&
+  if (deviceConfig.stationConnected() &&
       due(now, lastCurrentWeatherUpdate,
           Config::CURRENT_WEATHER_REFRESH_MS)) {
     lastCurrentWeatherUpdate = now;

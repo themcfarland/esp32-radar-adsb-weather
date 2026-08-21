@@ -20,10 +20,25 @@ class WeatherService {
       snapshot_.current = CurrentWeather{};
     }
   }
+  void setLocation(float latitude, float longitude) {
+    if (!isfinite(latitude) || !isfinite(longitude)) return;
+    const bool changed = fabsf(snapshot_.stationLat - latitude) > 0.00001f ||
+                         fabsf(snapshot_.stationLon - longitude) > 0.00001f;
+    snapshot_.stationLat = latitude;
+    snapshot_.stationLon = longitude;
+    if (changed) {
+      snapshot_.current = CurrentWeather{};
+      for (ForecastSlot& slot : snapshot_.slots) slot = ForecastSlot{};
+      snapshot_.forecastValid = false;
+      snapshot_.forecastSlotCount = 0;
+      strlcpy(snapshot_.forecastProduct, "--", sizeof(snapshot_.forecastProduct));
+    }
+  }
   const WeatherSnapshot& snapshot() const { return snapshot_; }
 
  private:
   bool fetchCurrent();
+  bool fetchOpenMeteoCurrent(int& httpCode);
   bool fetchForecast();
   bool fetchHourlyForecast(const char* duration, int& httpCode);
   bool fetchOpenMeteoForecast(int& httpCode);

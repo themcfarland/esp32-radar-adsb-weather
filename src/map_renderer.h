@@ -20,7 +20,8 @@ void drawBase(lv_obj_t* canvas, uint16_t* buffer, uint16_t width,
 void drawReference(lv_obj_t* canvas, uint16_t* buffer, uint16_t width,
                    uint16_t height, const MapViewport& viewport,
                    bool radarLayerEnabled, bool lightningLayerEnabled,
-                   bool adsbLayerEnabled, bool lightningProximityAlert);
+                   bool adsbLayerEnabled, bool lightningProximityAlert,
+                   float homeLat, float homeLon);
 void drawAircraft(lv_obj_t* canvas, uint16_t* buffer, uint16_t width,
                   uint16_t height, const AircraftSnapshot& aircraft,
                   const MapViewport& viewport,

@@ -637,23 +637,22 @@ void drawGeographicCircle(uint16_t* buffer, uint16_t width, uint16_t height,
 
 void drawLightningProximityAlert(uint16_t* buffer, uint16_t width,
                                  uint16_t height,
-                                 const MapViewport& viewport) {
+                                 const MapViewport& viewport, float homeLat,
+                                 float homeLon) {
   const uint16_t red = color(0xFF2020);
   // Outer edge is the requested true 10 km geodesic radius. The second line
   // sits just inside it to remain visible even in the full-country view.
-  drawGeographicCircle(buffer, width, height, viewport, Config::FALLBACK_LAT,
-                       Config::FALLBACK_LON,
+  drawGeographicCircle(buffer, width, height, viewport, homeLat, homeLon,
                        Config::LIGHTNING_ALERT_RADIUS_KM, red);
-  drawGeographicCircle(buffer, width, height, viewport, Config::FALLBACK_LAT,
-                       Config::FALLBACK_LON,
+  drawGeographicCircle(buffer, width, height, viewport, homeLat, homeLon,
                        Config::LIGHTNING_ALERT_RADIUS_KM - 0.20f, red);
 }
 
 void drawStation(uint16_t* buffer, uint16_t width, uint16_t height,
-                 const MapViewport& viewport) {
-  if (!geoVisible(Config::FALLBACK_LON, Config::FALLBACK_LAT, viewport)) return;
-  const int x = mapX(Config::FALLBACK_LON, width, viewport);
-  const int y = mapY(Config::FALLBACK_LAT, height, viewport);
+                 const MapViewport& viewport, float homeLat, float homeLon) {
+  if (!geoVisible(homeLon, homeLat, viewport)) return;
+  const int x = mapX(homeLon, width, viewport);
+  const int y = mapY(homeLat, height, viewport);
   const uint16_t outer = color(0xFFFFFF);
   const uint16_t inner = color(0x00D8FF);
   circle(buffer, width, height, x, y, 5, outer);
@@ -797,7 +796,8 @@ void drawBase(lv_obj_t* canvas, uint16_t* buffer, uint16_t width,
 void drawReference(lv_obj_t* canvas, uint16_t* buffer, uint16_t width,
                    uint16_t height, const MapViewport& viewport,
                    bool radarLayerEnabled, bool lightningLayerEnabled,
-                   bool adsbLayerEnabled, bool lightningProximityAlert) {
+                   bool adsbLayerEnabled, bool lightningProximityAlert,
+                   float homeLat, float homeLon) {
   const uint16_t borderShadow = color(0x081018);
   const uint16_t border = color(0xDCEAF2);
   const uint16_t city = color(0xFFFFFF);
@@ -825,9 +825,9 @@ void drawReference(lv_obj_t* canvas, uint16_t* buffer, uint16_t width,
   }
 
   if (lightningProximityAlert) {
-    drawLightningProximityAlert(buffer, width, height, viewport);
+    drawLightningProximityAlert(buffer, width, height, viewport, homeLat, homeLon);
   }
-  drawStation(buffer, width, height, viewport);
+  drawStation(buffer, width, height, viewport, homeLat, homeLon);
   if (radarLayerEnabled) drawLegend(canvas, buffer, width, height);
   if (lightningLayerEnabled) {
     drawLightningTrailLegend(canvas, buffer, width, height);

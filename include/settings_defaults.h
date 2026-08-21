@@ -11,9 +11,9 @@
 #endif
 
 #ifndef WU_STATION_ID
-#define WU_STATION_ID "IPLZE179"
+#define WU_STATION_ID ""
 #endif
 
 #ifndef ADSB_AIRCRAFT_URL
-#define ADSB_AIRCRAFT_URL "http://192.168.1.170:8080/data/aircraft.json"
+#define ADSB_AIRCRAFT_URL ""
 #endif

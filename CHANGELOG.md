@@ -1,3 +1,13 @@
+# 0.29.0-github-ready-cz
+
+- veřejná česká varianta bez osobních defaultů WU/ADS-B,
+- HOME latitude/longitude jsou webové nastavení uložené v NVS,
+- HOME se používá pro mapu, 10km bleskový alarm, Open-Meteo a astronomii,
+- lokální aircraft.json je volitelný; prázdná URL znamená adsb.fi-only,
+- Weather Underground je volitelný; bez něj funguje aktuální počasí i předpověď přes Open-Meteo,
+- výchozí poloha před prvním uložením je neutrální střed ČR,
+- zachován stabilní základ 0.28.20 včetně LightningMaps, hybridního ADS-B a OTA.
+
 # 0.28.20-adsb-local-buffered
 
 - Fixed `adsb.fi JSON: IncompleteInput` after a valid HTTP 200 response by downloading the complete JSON body into PSRAM before ArduinoJson parsing.

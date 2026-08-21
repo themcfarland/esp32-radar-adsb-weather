@@ -79,8 +79,8 @@ struct ForecastSlot {
 struct WeatherSnapshot {
   CurrentWeather current;
   ForecastSlot slots[3];
-  float stationLat = Config::FALLBACK_LAT;
-  float stationLon = Config::FALLBACK_LON;
+  float stationLat = Config::DEFAULT_HOME_LAT;
+  float stationLon = Config::DEFAULT_HOME_LON;
   bool forecastValid = false;
   uint8_t forecastSlotCount = 0;
   char forecastProduct[16] = "--";
@@ -217,8 +217,8 @@ struct AstronomySnapshot {
   float moonPhase = 0.0f;
   float moonIlluminationPct = 0.0f;
   char moonPhaseName[16] = "--";
-  float latitude = Config::FALLBACK_LAT;
-  float longitude = Config::FALLBACK_LON;
+  float latitude = Config::DEFAULT_HOME_LAT;
+  float longitude = Config::DEFAULT_HOME_LON;
   uint32_t epoch = 0;
   char status[48] = "Astronomy: waiting";
 };

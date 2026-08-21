@@ -120,7 +120,7 @@ void BarometerService::setOutdoorTemperature(float temperatureC,
   if (firstOutdoorSample && snapshot_.historyCount > 0) {
     clearHistory();
     DebugLog::println(
-        "Barometer: pressure history reset for first WU temperature");
+        "Barometer: pressure history reset for first outdoor temperature");
   }
 }
 
@@ -187,7 +187,7 @@ float BarometerService::selectReductionTemperature() {
   snapshot_.wuTemperatureLatestEpoch = lastOutdoorTemperatureEpoch_;
 
   if (recent) {
-    strlcpy(snapshot_.reductionTemperatureSource, "WU prumer 12 h",
+    strlcpy(snapshot_.reductionTemperatureSource, "venkovni prumer 12 h",
             sizeof(snapshot_.reductionTemperatureSource));
     snapshot_.reductionTemperatureC = averageC;
     return averageC;
