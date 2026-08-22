@@ -3,7 +3,7 @@ root = Path(__file__).resolve().parents[1]
 cpp = (root / "src/adsb_service.cpp").read_text()
 h = (root / "src/adsb_service.h").read_text()
 version = (root / "include/version.h").read_text()
-assert "0.30.2-home-map-weather" in version
+assert "0.30.3-home-map-buttons" in version
 assert "640U * 1024U" in cpp
 assert "client.setTimeout(15000)" in cpp
 assert "http.setTimeout(15000)" in cpp

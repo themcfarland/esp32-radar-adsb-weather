@@ -545,6 +545,7 @@ void DeviceConfigService::startWebServer() {
              [this]() { handleFactoryReset(); });
   server_.on("/reboot", HTTP_POST, [this]() { handleReboot(); });
   server_.on("/lcd-resync", HTTP_POST, [this]() { handleLcdResync(); });
+  server_.on("/map-zoom", HTTP_POST, [this]() { handleMapZoom(); });
   server_.on("/ota-prepare", HTTP_POST, [this]() { handleOtaPrepare(); });
   server_.on("/update", HTTP_POST,
              [this]() { handleOtaResult(); },
@@ -794,8 +795,8 @@ String DeviceConfigService::buildPage() const {
   page += F("h1{font-size:24px;margin:0 0 8px}h2{font-size:18px;margin:0 0 12px;color:#8bd5ff}");
   page += F("label{display:block;margin:12px 0 5px}input,select{width:100%;box-sizing:border-box;padding:11px;border-radius:8px;border:1px solid #456275;background:#071923;color:#fff}");
   page += F("input[type=checkbox]{width:auto;margin-right:8px}.row{display:grid;grid-template-columns:1fr 1fr;gap:12px}.three{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}.schedule{width:100%;border-collapse:collapse}.schedule th,.schedule td{padding:7px;border-bottom:1px solid #29495c;text-align:left}.schedule input[type=time]{min-width:120px}.wifi-profile{display:grid;grid-template-columns:110px 1fr 1fr;gap:10px;align-items:end;padding:10px 0;border-bottom:1px solid #29495c}.wifi-profile:last-child{border-bottom:0}.wifi-profile label{margin:0 0 5px}.wifi-enable{align-self:center;margin:0!important}.wifi-active{color:#6ee7a5;font-size:12px;display:block;margin-top:4px}");
-  page += F("button{background:#1976a8;color:white;border:0;border-radius:8px;padding:11px 16px;font-size:15px;cursor:pointer}.small{padding:8px 10px;margin:8px 5px 0 0}.nav{display:inline-block;background:#214f68;color:#fff;text-decoration:none;border-radius:8px;padding:9px 13px}.danger{background:#a83a3a}.muted{color:#a7bac5;font-size:13px}.ok{color:#6ee7a5}.warn{color:#ffd166}");
-  page += F("code{background:#071923;padding:2px 5px;border-radius:4px}@media(max-width:700px){.row,.three,.wifi-profile{grid-template-columns:1fr}.schedule{font-size:13px}.schedule input[type=time]{min-width:92px;padding:8px}}</style></head><body><main>");
+  page += F("button{background:#1976a8;color:white;border:0;border-radius:8px;padding:11px 16px;font-size:15px;cursor:pointer}.small{padding:8px 10px;margin:8px 5px 0 0}.nav{display:inline-block;background:#214f68;color:#fff;text-decoration:none;border-radius:8px;padding:9px 13px}.danger{background:#a83a3a}.muted{color:#a7bac5;font-size:13px}.ok{color:#6ee7a5}.warn{color:#ffd166}.map-zoom-buttons{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin-top:7px}.map-zoom-btn{background:#173d52;border:1px solid #3f6c83;font-weight:700}.map-zoom-btn.active{background:#1597d4;border-color:#76d4ff;box-shadow:0 0 0 2px rgba(118,212,255,.16) inset}.map-zoom-btn:disabled{opacity:.55;cursor:wait}.map-zoom-state{min-height:18px;margin:9px 0 0}");
+  page += F("code{background:#071923;padding:2px 5px;border-radius:4px}@media(max-width:700px){.row,.three,.wifi-profile{grid-template-columns:1fr}.map-zoom-buttons{grid-template-columns:1fr 1fr}.schedule{font-size:13px}.schedule input[type=time]{min-width:92px;padding:8px}}</style></head><body><main>");
   page += F("<h1>Radar CR + ADS-B</h1><p class='muted'>Firmware ");
   page += htmlEscape(FW_VERSION);
   page += F("</p><p><a class='nav' href='/diagnostics'>Diagnostika zarizeni</a></p><section class='card'><h2>Stav a pristup</h2><p>Sit: <strong>");
@@ -941,12 +942,14 @@ String DeviceConfigService::buildPage() const {
   page += String(settings_.homeLat, 5);
   page += F("'></div><div><label for='home_lon'>Zemepisna delka</label><input id='home_lon' name='home_lon' type='number' min='11.70' max='19.00' step='0.00001' required value='");
   page += String(settings_.homeLon, 5);
-  page += F("'></div></div><label for='home_map_zoom'>Rozsah mapy po ulozeni - stred HOME</label><select id='home_map_zoom' name='home_map_zoom'>");
-  page += F("<option value='0'"); if (currentMapZoom == 0) page += F(" selected"); page += F(">Cela CR</option>");
-  page += F("<option value='1'"); if (currentMapZoom == 1) page += F(" selected"); page += F(">Okoli HOME 50 km</option>");
-  page += F("<option value='2'"); if (currentMapZoom == 2) page += F(" selected"); page += F(">Okoli HOME 25 km</option>");
-  page += F("<option value='3'"); if (currentMapZoom == 3) page += F(" selected"); page += F(">Okoli HOME 10 km</option>");
-  page += F("</select><p class='muted'>Ulozeni zvoleneho rozsahu mapu ihned vycentruje na HOME a ulozi jej do mapoveho NVS. Dotykem mapy lze dale menit stred a zoom. HOME souradnice se soucasne pouzivaji pro 10km bleskovy alarm, Open-Meteo a astronomicke vypocty.</p></section>");
+  page += F("'></div></div><input type='hidden' id='home_map_zoom' name='home_map_zoom' value='");
+  page += String(currentMapZoom);
+  page += F("'><label>Rozsah mapy kolem HOME</label><div class='map-zoom-buttons'>");
+  page += F("<button type='button' class='map-zoom-btn"); if (currentMapZoom == 0) page += F(" active"); page += F("' data-mode='0'>Cela CR</button>");
+  page += F("<button type='button' class='map-zoom-btn"); if (currentMapZoom == 1) page += F(" active"); page += F("' data-mode='1'>50 km</button>");
+  page += F("<button type='button' class='map-zoom-btn"); if (currentMapZoom == 2) page += F(" active"); page += F("' data-mode='2'>25 km</button>");
+  page += F("<button type='button' class='map-zoom-btn"); if (currentMapZoom == 3) page += F(" active"); page += F("' data-mode='3'>10 km</button></div>");
+  page += F("<p id='map_zoom_state' class='muted map-zoom-state'>Kliknutim se mapa na displeji okamzite vycentruje na ulozenou pozici HOME a zvoleny rozsah se ulozi. Neni nutne stisknout Ulozit nastaveni.</p><p class='muted'>Dotykem mapy lze dale menit stred a zoom. HOME souradnice se soucasne pouzivaji pro 10km bleskovy alarm, Open-Meteo a astronomicke vypocty.</p></section>");
 
   page += F("<section class='card'><h2>Datove zdroje</h2><label><input type='checkbox' name='adsb_local_enabled' value='1'");
   if (settings_.localAdsbEnabled) page += F(" checked");
@@ -967,7 +970,7 @@ String DeviceConfigService::buildPage() const {
   page += F("<button type='submit'>Ulozit nastaveni</button></form>");
   page += F("<section class='card' style='margin-top:14px'><h2>OTA aktualizace firmware</h2><form id='ota_form' method='post' action='/update' enctype='multipart/form-data'><label for='firmware_file'>Firmware .bin</label><input id='firmware_file' type='file' name='firmware' accept='.bin,application/octet-stream' required><button id='ota_button' type='submit' style='margin-top:12px'>Nahrat firmware pres OTA</button><p id='ota_state' class='muted'>Nahraje se firmware.bin do neaktivni OTA partition. Po uspesnem overeni se zarizeni automaticky restartuje do nove verze. Nastaveni v NVS zustanou zachovana.</p></form></section>");
   page += F("<section class='card'><h2>Servis</h2><form method='post' action='/lcd-resync' style='display:inline'><button type='submit'>Srovnat LCD</button></form> <form method='post' action='/reboot' style='display:inline'><button type='submit'>Restart</button></form> <form method='post' action='/factory-reset' style='display:inline'><button type='submit' class='danger'>Smazat nastaveni</button></form><p class='muted'>Rucni srovnani zustava k dispozici. Firmware navic po neobvykle dlouhe blokujici operaci naplanuje jednorazove bezpecne srovnani RGB DMA; nejde o periodicky restart displeje.</p></section>");
-  page += F("<script>const otaForm=document.getElementById('ota_form'),otaButton=document.getElementById('ota_button'),otaState=document.getElementById('ota_state'),otaFile=document.getElementById('firmware_file');if(otaForm)otaForm.addEventListener('submit',async(e)=>{e.preventDefault();const f=otaFile&&otaFile.files&&otaFile.files[0];if(!f)return;otaButton.disabled=true;otaButton.textContent='Pripravuji...';otaState.textContent='Pripravuji OTA obrazovku...';try{await fetch('/ota-prepare?name='+encodeURIComponent(f.name)+'&size='+encodeURIComponent(f.size),{method:'POST',cache:'no-store'});await new Promise(r=>setTimeout(r,1100));otaState.textContent='OTA zapisuje novy firmware. Displej muze byt behem zapisu zhasnuty. Nevypinejte zarizeni ani Wi-Fi.';otaButton.textContent='Nahravam...';otaForm.action='/update?size='+encodeURIComponent(f.size);otaForm.submit();}catch(err){otaButton.disabled=false;otaButton.textContent='Nahrat firmware';otaState.textContent='OTA priprava selhala: '+err;}});const s=document.getElementById('aircraft_now');document.querySelectorAll('.assign').forEach(b=>b.addEventListener('click',()=>{if(s.value)document.getElementById('alert_target_'+b.dataset.slot).value=s.value;}));let baroDiag=null;const calData=document.getElementById('baro_calibration_data');const calResult=document.getElementById('baro_calibration_result');async function loadBaroCalibration(){try{const r=await fetch('/api/diagnostics',{cache:'no-store'});if(!r.ok)throw Error(r.status);baroDiag=await r.json();if(!baroDiag.barometer_valid){calData.textContent='BMP180 zatim nema platne mereni';return;}const raw=baroDiag.barometer_raw_pressure_hpa;const temp=baroDiag.barometer_reduction_temperature_c;const wu=baroDiag.weather_pressure_hpa;calData.textContent='BMP180 '+raw.toFixed(1)+' hPa | T '+temp.toFixed(1)+' C | POCASI '+(wu===null?'--':wu.toFixed(1)+' hPa');if(wu!==null&&!document.getElementById('baro_reference').value)document.getElementById('baro_reference').value=wu.toFixed(1);}catch(e){calData.textContent='Diagnostika neni dostupna: '+e;}}document.getElementById('baro_use_wu').addEventListener('click',async()=>{if(!baroDiag)await loadBaroCalibration();if(!baroDiag||baroDiag.weather_pressure_hpa===null){calResult.textContent='Aktualni pocasi neposkytuje platny referencni tlak.';return;}document.getElementById('baro_reference').value=baroDiag.weather_pressure_hpa.toFixed(1);calResult.textContent='Referencni tlak byl prevzat z aktualniho zdroje pocasi.';});document.getElementById('baro_calculate').addEventListener('click',async()=>{if(!baroDiag)await loadBaroCalibration();if(!baroDiag||!baroDiag.barometer_valid){calResult.textContent='Nejprve je nutne platne mereni BMP180.';return;}const p=Number(baroDiag.barometer_raw_pressure_hpa),p0=Number(document.getElementById('baro_reference').value),t=Number(baroDiag.barometer_reduction_temperature_c);if(!Number.isFinite(p0)||p0<850||p0>1100||!Number.isFinite(p)||p<=0){calResult.textContent='Zadejte platny referencni tlak 850 az 1100 hPa.';return;}const h=((Math.pow(p0/p,1/5.257)-1)*(t+273.15))/0.0065;if(!Number.isFinite(h)||h<-500||h>5000){calResult.textContent='Z techto hodnot nelze vypocitat platnou vysku.';return;}document.getElementById('baro_altitude').value=h.toFixed(1);document.getElementById('baro_offset').value='0.0';calResult.textContent=p.toFixed(1)+' hPa -> '+p0.toFixed(1)+' hPa pri '+t.toFixed(1)+' C: navrzena vyska '+h.toFixed(1)+' m. Stisknete Ulozit nastaveni.';});loadBaroCalibration();</script></main></body></html>");
+  page += F("<script>const otaForm=document.getElementById('ota_form'),otaButton=document.getElementById('ota_button'),otaState=document.getElementById('ota_state'),otaFile=document.getElementById('firmware_file');if(otaForm)otaForm.addEventListener('submit',async(e)=>{e.preventDefault();const f=otaFile&&otaFile.files&&otaFile.files[0];if(!f)return;otaButton.disabled=true;otaButton.textContent='Pripravuji...';otaState.textContent='Pripravuji OTA obrazovku...';try{await fetch('/ota-prepare?name='+encodeURIComponent(f.name)+'&size='+encodeURIComponent(f.size),{method:'POST',cache:'no-store'});await new Promise(r=>setTimeout(r,1100));otaState.textContent='OTA zapisuje novy firmware. Displej muze byt behem zapisu zhasnuty. Nevypinejte zarizeni ani Wi-Fi.';otaButton.textContent='Nahravam...';otaForm.action='/update?size='+encodeURIComponent(f.size);otaForm.submit();}catch(err){otaButton.disabled=false;otaButton.textContent='Nahrat firmware';otaState.textContent='OTA priprava selhala: '+err;}});const s=document.getElementById('aircraft_now');document.querySelectorAll('.assign').forEach(b=>b.addEventListener('click',()=>{if(s.value)document.getElementById('alert_target_'+b.dataset.slot).value=s.value;}));const mapZoomInput=document.getElementById('home_map_zoom'),mapZoomState=document.getElementById('map_zoom_state'),mapZoomButtons=[...document.querySelectorAll('.map-zoom-btn')];mapZoomButtons.forEach(b=>b.addEventListener('click',async()=>{const mode=b.dataset.mode;mapZoomButtons.forEach(x=>x.disabled=true);mapZoomState.textContent='Menim rozsah mapy na displeji...';try{const r=await fetch('/map-zoom?mode='+encodeURIComponent(mode),{method:'POST',cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);const d=await r.json();if(!d.ok)throw Error(d.error||'neznamy problem');mapZoomInput.value=String(d.mode);mapZoomButtons.forEach(x=>x.classList.toggle('active',x.dataset.mode===String(d.mode)));mapZoomState.textContent='Mapa byla prepnuta na '+d.label+' a vycentrovana na HOME.';}catch(e){mapZoomState.textContent='Zmena mapy selhala: '+e;}finally{mapZoomButtons.forEach(x=>x.disabled=false);}}));let baroDiag=null;const calData=document.getElementById('baro_calibration_data');const calResult=document.getElementById('baro_calibration_result');async function loadBaroCalibration(){try{const r=await fetch('/api/diagnostics',{cache:'no-store'});if(!r.ok)throw Error(r.status);baroDiag=await r.json();if(!baroDiag.barometer_valid){calData.textContent='BMP180 zatim nema platne mereni';return;}const raw=baroDiag.barometer_raw_pressure_hpa;const temp=baroDiag.barometer_reduction_temperature_c;const wu=baroDiag.weather_pressure_hpa;calData.textContent='BMP180 '+raw.toFixed(1)+' hPa | T '+temp.toFixed(1)+' C | POCASI '+(wu===null?'--':wu.toFixed(1)+' hPa');if(wu!==null&&!document.getElementById('baro_reference').value)document.getElementById('baro_reference').value=wu.toFixed(1);}catch(e){calData.textContent='Diagnostika neni dostupna: '+e;}}document.getElementById('baro_use_wu').addEventListener('click',async()=>{if(!baroDiag)await loadBaroCalibration();if(!baroDiag||baroDiag.weather_pressure_hpa===null){calResult.textContent='Aktualni pocasi neposkytuje platny referencni tlak.';return;}document.getElementById('baro_reference').value=baroDiag.weather_pressure_hpa.toFixed(1);calResult.textContent='Referencni tlak byl prevzat z aktualniho zdroje pocasi.';});document.getElementById('baro_calculate').addEventListener('click',async()=>{if(!baroDiag)await loadBaroCalibration();if(!baroDiag||!baroDiag.barometer_valid){calResult.textContent='Nejprve je nutne platne mereni BMP180.';return;}const p=Number(baroDiag.barometer_raw_pressure_hpa),p0=Number(document.getElementById('baro_reference').value),t=Number(baroDiag.barometer_reduction_temperature_c);if(!Number.isFinite(p0)||p0<850||p0>1100||!Number.isFinite(p)||p<=0){calResult.textContent='Zadejte platny referencni tlak 850 az 1100 hPa.';return;}const h=((Math.pow(p0/p,1/5.257)-1)*(t+273.15))/0.0065;if(!Number.isFinite(h)||h<-500||h>5000){calResult.textContent='Z techto hodnot nelze vypocitat platnou vysku.';return;}document.getElementById('baro_altitude').value=h.toFixed(1);document.getElementById('baro_offset').value='0.0';calResult.textContent=p.toFixed(1)+' hPa -> '+p0.toFixed(1)+' hPa pri '+t.toFixed(1)+' C: navrzena vyska '+h.toFixed(1)+' m. Stisknete Ulozit nastaveni.';});loadBaroCalibration();</script></main></body></html>");
   return page;
 }
 
@@ -1411,6 +1414,38 @@ void DeviceConfigService::handleSave() {
     server_.sendHeader("Location", "/", true);
     server_.send(303, "text/plain", "Nastaveni bylo pouzito.");
   }
+}
+
+void DeviceConfigService::handleMapZoom() {
+  bool valid = false;
+  const MapZoomMode mode = parseMapZoomMode(server_.arg("mode"), valid);
+  if (!valid) {
+    server_.sendHeader("Cache-Control", "no-store");
+    server_.send(400, "application/json; charset=utf-8",
+                 "{\"ok\":false,\"error\":\"neplatny rozsah mapy\"}");
+    return;
+  }
+
+  requestedMapZoom_ = mode;
+  mapZoomRequestPending_ = true;
+
+  String json;
+  json.reserve(96);
+  json += F("{\"ok\":true,\"mode\":");
+  json += String(static_cast<uint8_t>(mode));
+  json += F(",\"label\":\"");
+  switch (mode) {
+    case MapZoomMode::Full: json += F("cela CR"); break;
+    case MapZoomMode::Km50: json += F("50 km"); break;
+    case MapZoomMode::Km25: json += F("25 km"); break;
+    case MapZoomMode::Km10: json += F("10 km"); break;
+  }
+  json += F("\"}");
+
+  DebugLog::printf("Config: immediate HOME map zoom requested: %u\n",
+                   static_cast<unsigned>(mode));
+  server_.sendHeader("Cache-Control", "no-store");
+  server_.send(200, "application/json; charset=utf-8", json);
 }
 
 void DeviceConfigService::handleFactoryReset() {

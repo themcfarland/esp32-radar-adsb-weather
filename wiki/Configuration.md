@@ -102,3 +102,7 @@ Ve webovem nastaveni lze vedle HOME latitude/longitude zvolit **Cela CR**, **50 
 ## Pocasi HOME bez Weather Underground
 
 WU ucet neni potreba. Pokud WU station ID nebo API key nejsou vyplnene, aktualni pocasi i predpoved se automaticky nacitaji z Open-Meteo podle HOME latitude/longitude. WU je pouze volitelny prioritni zdroj vlastni PWS; pri jeho chybe se pouzije Open-Meteo.
+
+## Okamzite prepinani rozsahu mapy
+
+V sekci HOME jsou tlacitka **Cela CR**, **50 km**, **25 km** a **10 km**. Kliknuti se okamzite projevi na LCD, mapa se vycentruje na ulozenou HOME pozici a volba se ulozi do NVS. Neni nutne stisknout hlavni tlacitko Ulozit nastaveni.

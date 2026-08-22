@@ -1,6 +1,6 @@
 # Waveshare 7" Radar ČR + ADS-B + počasí
 
-Firmware **0.30.2-home-map-weather** je veřejná česká varianta projektu pro
+Firmware **0.30.3-home-map-buttons** je veřejná česká varianta projektu pro
 **Waveshare ESP32-S3-Touch-LCD-7 (800×480, ST7262, GT911, 8 MB OPI PSRAM)**.
 Po stažení z GitHubu neobsahuje osobní Wi-Fi, Weather Underground stanici ani
 lokální IP adresu ADS-B přijímače.
@@ -163,3 +163,7 @@ Dodržujte podmínky použití jednotlivých poskytovatelů dat.
 ### v0.29.6
 
 Hlavni LCD obrazovka uz nezobrazuje tlacitka **PAUZA** a **OBNOVIT**. Radarova animace a obnovovani dat probiha automaticky.
+
+### Okamzite prepinani mapy z webu
+
+V sekci HOME jsou ctyri tlacitka `Cela CR / 50 km / 25 km / 10 km`. Stisk tlacitka okamzite vycentruje LCD mapu na ulozenou polohu HOME a ulozi mapovy rezim do NVS; neni nutne odesilat cely formular.

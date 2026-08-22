@@ -1,3 +1,8 @@
+## 0.30.3-home-map-buttons
+
+- tlacitka Cela CR / 50 / 25 / 10 km ve webu
+- okamzite prekresleni LCD mapy kolem HOME bez odeslani celeho formulare
+
 ## 0.30.2-home-map-weather
 
 - mapovy rozsah HOME lze nastavit z webu: CR / 50 / 25 / 10 km,

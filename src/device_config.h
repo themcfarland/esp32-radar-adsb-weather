@@ -96,6 +96,7 @@ class DeviceConfigService {
   void handleFactoryReset();
   void handleReboot();
   void handleLcdResync();
+  void handleMapZoom();
   void handleOtaPrepare();
   void handleOtaUpload();
   void handleOtaResult();

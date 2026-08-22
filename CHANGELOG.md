@@ -1,3 +1,9 @@
+## 0.30.3-home-map-buttons
+
+- Webove nastaveni rozsahu mapy kolem HOME je nyni reseno ctyrmi tlacitky: Cela CR / 50 km / 25 km / 10 km.
+- Kliknuti se projevi okamzite na LCD bez odeslani celeho konfiguracniho formulare.
+- Volba se soucasne ulozi do mapoveho NVS stejnou cestou jako zmena zoomu dotykem.
+
 ## 0.30.2-home-map-weather
 
 - Webove nastaveni umoznuje zvolit mapovy rozsah kolem HOME: cela CR / 50 km / 25 km / 10 km. Po ulozeni se mapa okamzite vycentruje na HOME a volba se ulozi stavajicim mapview NVS mechanismem.
