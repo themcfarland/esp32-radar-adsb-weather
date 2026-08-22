@@ -63,3 +63,8 @@ Není internetovým zdrojem. Měří místní tlak a teplotu senzoru a použív�
 ### Časová reprezentace
 
 Síťové zdroje mohou používat UTC nebo Unix epoch. Firmware je uchovává v původní časové reprezentaci pro správné řazení a synchronizaci, ale všechny hodinové údaje zobrazované uživateli převádí na český místní čas CET/CEST.
+
+
+## Open-Meteo pro HOME
+
+Open-Meteo je bezuctovy zdroj pocasi pro GPS souradnice HOME. Poskytuje aktualni teplotu, vlhkost, tlak, srazky, vitr/narazy a predpovedni sloty +3/+6/+9 h. Pokud neni nastaven Weather Underground, pouzije se automaticky.

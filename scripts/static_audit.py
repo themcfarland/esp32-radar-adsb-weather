@@ -42,8 +42,8 @@ ui_cpp = read("src/ui.cpp")
 patch = read("scripts/patch_display_driver.py")
 readme = read("README.md")
 
-require("0.30.0-network-worker" in version,
-        "firmware version is not v0.30.0-network-worker")
+require("0.30.2-home-map-weather" in version,
+        "firmware version is not v0.30.2-home-map-weather")
 require("DEFAULT_HOME_LAT" in config and "DEFAULT_HOME_LON" in config and
         "home_lat" in device_cpp and "home_lon" in device_cpp and
         "settings_.homeLat" in device_cpp and "settings_.homeLon" in device_cpp,

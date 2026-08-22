@@ -6,7 +6,7 @@ h = (ROOT / "src" / "adsb_service.h").read_text()
 main = (ROOT / "src" / "main.cpp").read_text()
 version = (ROOT / "include" / "version.h").read_text()
 
-assert "0.30.0-network-worker" in version
+assert "0.30.2-home-map-weather" in version
 assert "downloadJsonBody" in cpp
 assert "truncated HTTP body" in cpp
 assert "body complete" in cpp

@@ -143,6 +143,16 @@ bool parseFloatValue(String value, float& result) {
   while (*end && isspace(static_cast<unsigned char>(*end))) ++end;
   return *end == '\0' && isfinite(result);
 }
+
+MapZoomMode parseMapZoomMode(const String& value, bool& valid) {
+  valid = true;
+  if (value == "0") return MapZoomMode::Full;
+  if (value == "1") return MapZoomMode::Km50;
+  if (value == "2") return MapZoomMode::Km25;
+  if (value == "3") return MapZoomMode::Km10;
+  valid = false;
+  return MapZoomMode::Full;
+}
 }  // namespace
 
 DeviceConfigService::DeviceConfigService() : server_(80) {}
@@ -657,6 +667,13 @@ bool DeviceConfigService::consumeLcdResyncRequested() {
   return requested;
 }
 
+bool DeviceConfigService::consumeMapZoomRequested(MapZoomMode& mode) {
+  if (!mapZoomRequestPending_) return false;
+  mode = requestedMapZoom_;
+  mapZoomRequestPending_ = false;
+  return true;
+}
+
 bool DeviceConfigService::saveSettings() {
   Preferences preferences;
   if (!preferences.begin(kPreferencesNamespace, false)) return false;
@@ -764,8 +781,11 @@ bool DeviceConfigService::alertTargetPresent(size_t slot) const {
 }
 
 String DeviceConfigService::buildPage() const {
+  const uint8_t currentMapZoom = runtimeDiagnostics_
+                                     ? runtimeDiagnostics_->mapZoomMode
+                                     : static_cast<uint8_t>(MapZoomMode::Full);
   String page;
-  page.reserve(32000);
+  page.reserve(33000);
   page += F("<!doctype html><html lang='cs'><head><meta charset='utf-8'>");
   page += F("<meta name='viewport' content='width=device-width,initial-scale=1'>");
   page += F("<title>Radar ADS-B nastaveni</title><style>");
@@ -917,11 +937,16 @@ String DeviceConfigService::buildPage() const {
   }
   page += F("<p class='muted'>Zmena profilu, SSID nebo hesla vyzaduje restart. Pri zmene SSID znamena prazdne heslo otevrenou sit. Pokud vypnete vsechny profily, zarizeni po restartu zustane v konfiguracnim AP.</p></section>");
 
-  page += F("<section class='card'><h2>Poloha zarizeni</h2><div class='row'><div><label for='home_lat'>Zemepisna sirka</label><input id='home_lat' name='home_lat' type='number' min='48.30' max='51.30' step='0.00001' required value='");
+  page += F("<section class='card'><h2>Poloha HOME a rozsah mapy</h2><div class='row'><div><label for='home_lat'>Zemepisna sirka</label><input id='home_lat' name='home_lat' type='number' min='48.30' max='51.30' step='0.00001' required value='");
   page += String(settings_.homeLat, 5);
   page += F("'></div><div><label for='home_lon'>Zemepisna delka</label><input id='home_lon' name='home_lon' type='number' min='11.70' max='19.00' step='0.00001' required value='");
   page += String(settings_.homeLon, 5);
-  page += F("'></div></div><p class='muted'>HOME poloha se pouziva pro znacku na mape, 10km bleskovy alarm, Open-Meteo a astronomicke vypocty. Ceska casova zona CET/CEST je nastavena automaticky.</p></section>");
+  page += F("'></div></div><label for='home_map_zoom'>Rozsah mapy po ulozeni - stred HOME</label><select id='home_map_zoom' name='home_map_zoom'>");
+  page += F("<option value='0'"); if (currentMapZoom == 0) page += F(" selected"); page += F(">Cela CR</option>");
+  page += F("<option value='1'"); if (currentMapZoom == 1) page += F(" selected"); page += F(">Okoli HOME 50 km</option>");
+  page += F("<option value='2'"); if (currentMapZoom == 2) page += F(" selected"); page += F(">Okoli HOME 25 km</option>");
+  page += F("<option value='3'"); if (currentMapZoom == 3) page += F(" selected"); page += F(">Okoli HOME 10 km</option>");
+  page += F("</select><p class='muted'>Ulozeni zvoleneho rozsahu mapu ihned vycentruje na HOME a ulozi jej do mapoveho NVS. Dotykem mapy lze dale menit stred a zoom. HOME souradnice se soucasne pouzivaji pro 10km bleskovy alarm, Open-Meteo a astronomicke vypocty.</p></section>");
 
   page += F("<section class='card'><h2>Datove zdroje</h2><label><input type='checkbox' name='adsb_local_enabled' value='1'");
   if (settings_.localAdsbEnabled) page += F(" checked");
@@ -929,7 +954,7 @@ String DeviceConfigService::buildPage() const {
   page += htmlEscape(settings_.adsbUrl);
   page += F("' placeholder='http://192.168.1.100:8080/data/aircraft.json'><p class='muted'>Pri vypnuti se lokalni prijimac vubec nedotazuje; URL zustane ulozena a adsb.fi dal poskytuje provoz pro celou CR. Pri zapnuti se po 3 po sobe jdoucich chybach lokalniho prijimace automaticky pouzije 30s backoff.</p><div class='row'><div><label for='wu_station'>WU stanice - volitelne</label><input id='wu_station' name='wu_station' maxlength='20' value='");
   page += htmlEscape(settings_.wuStationId);
-  page += F("'></div><div><label for='wu_key'>Novy WU API klic - volitelne</label><input id='wu_key' name='wu_key' type='password' maxlength='96' placeholder='Prazdne = zachovat ulozeny klic'></div></div><p class='muted'>Bez lokalniho prijimace se letadla nacitaji z adsb.fi pro celou CR. Pokud lokalni aircraft.json zadate, ma prioritu a adsb.fi doplni provoz mimo jeho dosah vcetne MLAT. Aktualni pocasi i predpoved funguji bez uctu pres Open-Meteo; Weather Underground je volitelny zdroj vlastni PWS. Prazdna WU stanice WU vypne.</p></section>");
+  page += F("'></div><div><label for='wu_key'>Novy WU API klic - volitelne</label><input id='wu_key' name='wu_key' type='password' maxlength='96' placeholder='Prazdne = zachovat ulozeny klic'></div></div><p class='muted'><strong>Pocasi HOME bez uctu:</strong> pokud neni vyplnena WU stanice/API klic, firmware automaticky pouzije Open-Meteo pro GPS souradnice HOME. Z Open-Meteo se nacita aktualni teplota, vlhkost, tlak, srazky, vitr a narazy vetru i predpoved +3/+6/+9 h. Pokud je WU nakonfigurovano, ma prioritu pro aktualni data vlastni PWS a pri chybe se automaticky pouzije Open-Meteo.</p><p class='muted'>Bez lokalniho ADS-B prijimace se letadla nacitaji z adsb.fi pro celou CR. Pokud lokalni aircraft.json zadate, ma prioritu a adsb.fi doplni provoz mimo jeho dosah vcetne MLAT.</p></section>");
 
   page += F("<section class='card'><h2>I2C barometr a Zambretti</h2><label><input type='checkbox' name='baro_enabled' value='1'");
   if (settings_.barometerEnabled) page += F(" checked");
@@ -1035,6 +1060,8 @@ void DeviceConfigService::handleDiagnosticsJson() {
   json += String(settings_.homeLat, 5);
   json += F(",\"home_lon\":");
   json += String(settings_.homeLon, 5);
+  json += F(",\"map_zoom_mode\":");
+  json += String(diagnostics.mapZoomMode);
   json += F(",\"radar_status\":\"");
   json += jsonEscape(diagnostics.radarStatus);
   json += F("\",\"radar_frame_count\":");
@@ -1264,6 +1291,13 @@ void DeviceConfigService::handleSave() {
     sendErrorPage("Poloha HOME musi lezet v rozsahu mapy Ceske republiky.");
     return;
   }
+  bool mapZoomValid = false;
+  const MapZoomMode newMapZoom =
+      parseMapZoomMode(server_.arg("home_map_zoom"), mapZoomValid);
+  if (!mapZoomValid) {
+    sendErrorPage("Neplatny rozsah mapy HOME.");
+    return;
+  }
   const bool newRadarLayerEnabled = server_.hasArg("layer_radar");
   const bool newLightningLayerEnabled = server_.hasArg("layer_lightning");
   const bool newAdsbLayerEnabled = server_.hasArg("layer_adsb");
@@ -1349,6 +1383,11 @@ void DeviceConfigService::handleSave() {
     return;
   }
 
+  // The map view uses its existing separate `mapview` Preferences namespace.
+  // Queue the requested HOME-centred zoom only after the configuration write
+  // succeeded so a failed NVS save cannot change the live map unexpectedly.
+  requestedMapZoom_ = newMapZoom;
+  mapZoomRequestPending_ = true;
   runtimeSettingsChanged_ = true;
   DebugLog::printf(
       "Config: saved, Wi-Fi profiles=%u, home=%.5f,%.5f, localADSB=%s, layers=%s, alerts=%s [%s|%s|%s], barometer=%s alt=%.1f offset=%+.1f\n",

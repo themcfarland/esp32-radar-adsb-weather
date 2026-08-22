@@ -5,6 +5,7 @@
 #include <WebServer.h>
 
 #include "config.h"
+#include "map_viewport.h"
 #include "models.h"
 
 constexpr size_t BACKLIGHT_DAY_COUNT = 7;
@@ -78,6 +79,7 @@ class DeviceConfigService {
   AircraftAlertConfig alertConfig() const;
   bool consumeRuntimeSettingsChanged();
   bool consumeLcdResyncRequested();
+  bool consumeMapZoomRequested(MapZoomMode& mode);
   bool otaInProgress() const { return otaInProgress_; }
   void setOtaDisplayCallback(OtaDisplayCallback callback) {
     otaDisplayCallback_ = callback;
@@ -119,6 +121,8 @@ class DeviceConfigService {
   bool restartPending_ = false;
   bool runtimeSettingsChanged_ = false;
   bool lcdResyncRequested_ = false;
+  bool mapZoomRequestPending_ = false;
+  MapZoomMode requestedMapZoom_ = MapZoomMode::Full;
   bool otaInProgress_ = false;
   bool otaPrepareDisplayPending_ = false;
   bool otaDisplayFailurePending_ = false;

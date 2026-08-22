@@ -93,3 +93,12 @@ Web nabízí:
 - LCD resync,
 - factory reset,
 - OTA firmware.
+
+
+## Rozsah mapy kolem HOME
+
+Ve webovem nastaveni lze vedle HOME latitude/longitude zvolit **Cela CR**, **50 km**, **25 km** nebo **10 km**. Po ulozeni se mapa vycentruje na HOME a vyrez se ulozi. Dotykove prepinani zoomu na displeji zustava aktivni.
+
+## Pocasi HOME bez Weather Underground
+
+WU ucet neni potreba. Pokud WU station ID nebo API key nejsou vyplnene, aktualni pocasi i predpoved se automaticky nacitaji z Open-Meteo podle HOME latitude/longitude. WU je pouze volitelny prioritni zdroj vlastni PWS; pri jeho chybe se pouzije Open-Meteo.

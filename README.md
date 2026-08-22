@@ -1,6 +1,6 @@
 # Waveshare 7" Radar ČR + ADS-B + počasí
 
-Firmware **0.30.1-network-worker-buildfix** je veřejná česká varianta projektu pro
+Firmware **0.30.2-home-map-weather** je veřejná česká varianta projektu pro
 **Waveshare ESP32-S3-Touch-LCD-7 (800×480, ST7262, GT911, 8 MB OPI PSRAM)**.
 Po stažení z GitHubu neobsahuje osobní Wi-Fi, Weather Underground stanici ani
 lokální IP adresu ADS-B přijímače.
@@ -85,14 +85,16 @@ http://192.168.1.100:8080/data/aircraft.json
 
 Lokální data mají prioritu a adsb.fi doplní vzdálenější ADS-B/MLAT provoz.
 
-### Weather Underground
-WU station ID a API key jsou volitelné. Pokud nejsou vyplněné, aktuální počasí
-i předpověď používají Open-Meteo. Pokud jsou vyplněné, firmware preferuje
-aktuální měření vlastní PWS a při chybě automaticky použije Open-Meteo.
+### Počasí HOME / Weather Underground
+Weather Underground není pro provoz nutný. Pokud uživatel nemá WU účet nebo ponechá WU station ID / API key prázdné, firmware automaticky použije **Open-Meteo podle GPS souřadnic HOME**. Získává tak aktuální teplotu, relativní vlhkost, tlak, srážky, rychlost a směr větru, nárazy větru a předpověď +3/+6/+9 hodin.
 
-## HOME poloha
+Pokud jsou WU station ID a API key vyplněné, firmware preferuje aktuální měření vlastní PWS. Když WU selže, automaticky přejde na Open-Meteo pro HOME souřadnice.
 
-Latitude/longitude se nastavují ve webu a ukládají do NVS. Používají se pro:
+## HOME poloha a mapový rozsah
+
+Latitude/longitude se nastavují ve webu a ukládají do NVS. Ve stejné kartě lze zvolit také výchozí/aktuální rozsah mapy kolem HOME: **celá ČR / 50 km / 25 km / 10 km**. Po uložení se mapa vycentruje na HOME a mapový výřez se uloží do existujícího `mapview` NVS. Dotykové přepínání zoomu na LCD zůstává zachováno.
+
+HOME latitude/longitude se používají pro:
 
 - značku HOME na mapě,
 - 10km bleskový výstražný kruh,

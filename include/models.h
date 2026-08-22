@@ -192,6 +192,7 @@ struct RuntimeDiagnostics {
   char astronomyStatus[48] = "Astronomy: waiting";
   char forecastProduct[16] = "--";
   char mapView[24] = "cela CR";
+  uint8_t mapZoomMode = 0;
   uint8_t barometerAddress = 0;
   float barometerPressureHpa = NAN;
   float barometerRawPressureHpa = NAN;

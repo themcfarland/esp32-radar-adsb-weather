@@ -1,3 +1,9 @@
+## 0.30.2-home-map-weather
+
+- mapovy rozsah HOME lze nastavit z webu: CR / 50 / 25 / 10 km,
+- ulozeni recenteruje mapu na HOME a zachova volbu v NVS,
+- zvyraznen Open-Meteo HOME fallback bez WU uctu.
+
 ## 0.30.0 – Network worker
 
 - runtime DNS/TCP/TLS/HTTP operace přesunuty z hlavního `loop()` do samostatného FreeRTOS workeru na core 0,

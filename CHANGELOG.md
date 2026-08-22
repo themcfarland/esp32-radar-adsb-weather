@@ -1,3 +1,10 @@
+## 0.30.2-home-map-weather
+
+- Webove nastaveni umoznuje zvolit mapovy rozsah kolem HOME: cela CR / 50 km / 25 km / 10 km. Po ulozeni se mapa okamzite vycentruje na HOME a volba se ulozi stavajicim mapview NVS mechanismem.
+- Aktualni mapovy zoom se prenasi do webu z runtime diagnostiky, takze formular zobrazuje skutecne pouzivany rozsah.
+- Zpresnena a zviditelnena funkce pocasi HOME bez Weather Underground: prazdne WU udaje automaticky pouziji Open-Meteo podle HOME latitude/longitude pro aktualni pocasi i +3/+6/+9 h forecast.
+- Weather Underground zustava volitelny a pri chybe aktualniho PWS se zachovava automaticky fallback na Open-Meteo HOME.
+
 # Changelog
 
 ## 0.30.0-network-worker

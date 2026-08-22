@@ -623,6 +623,8 @@ void updateRuntimeDiagnostics() {
   strlcpy(runtimeDiagnostics.mapView,
           MapRenderer::zoomModeLabel(mapViewport.mode),
           sizeof(runtimeDiagnostics.mapView));
+  runtimeDiagnostics.mapZoomMode =
+      static_cast<uint8_t>(mapViewport.mode);
 
   const time_t epoch = time(nullptr);
   runtimeDiagnostics.timeSynchronized = epoch > 1700000000;
@@ -1015,6 +1017,23 @@ void loop() {
     // one recovery on the next VSYNC after the new settings are applied.
     displayResyncPending = true;
     DebugLog::println("Runtime web settings applied without restart");
+  }
+
+  MapZoomMode requestedMapZoom = MapZoomMode::Full;
+  if (deviceConfig.consumeMapZoomRequested(requestedMapZoom)) {
+    mapViewport = MapRenderer::makeViewport(
+        requestedMapZoom, homeLat, homeLon, Config::MAP_W, Config::MAP_H);
+    radarFrame = 0;
+    lastRadarAnimation = now;
+    mapDirty = true;
+    // Web settings may also change Wi-Fi and schedule a reboot shortly after
+    // saving. Persist this explicit web map choice immediately so it survives
+    // that reboot instead of waiting for the delayed touch-save timer.
+    saveMapViewport();
+    displayResyncPending = true;
+    DebugLog::printf("Map web: %s centered on HOME %.5f, %.5f\n",
+                     MapRenderer::zoomModeLabel(mapViewport.mode),
+                     homeLat, homeLon);
   }
 
   updateBacklightControl(now);
