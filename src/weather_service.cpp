@@ -74,6 +74,14 @@ int arrayIntOr(JsonArrayConst array, size_t index, int fallback) {
   return static_cast<int>(lroundf(array[index].as<float>()));
 }
 
+bool formatLocalClock(uint32_t epoch, char* output, size_t outputSize) {
+  if (!output || outputSize == 0 || epoch < 1600000000UL) return false;
+  const time_t value = static_cast<time_t>(epoch);
+  struct tm local {};
+  localtime_r(&value, &local);
+  return strftime(output, outputSize, "%H:%M", &local) > 0;
+}
+
 int wmoToTwcIcon(int code) {
   if (code == 0) return 32;
   if (code == 1) return 34;
@@ -351,8 +359,11 @@ bool WeatherService::fetchHourlyForecast(const char* duration, int& httpCode) {
 
     ForecastSlot& target = snapshot_.slots[slotIndex];
     target.valid = true;
-    snprintf(target.timeText, sizeof(target.timeText), "+%u h",
-             static_cast<unsigned>(hoursAhead));
+    const uint32_t slotEpoch = times[sourceIndex].as<uint32_t>();
+    if (!formatLocalClock(slotEpoch, target.timeText, sizeof(target.timeText))) {
+      snprintf(target.timeText, sizeof(target.timeText), "+%u h",
+               static_cast<unsigned>(hoursAhead));
+    }
     target.temperatureC = arrayIntOr(temperatures, sourceIndex, 0);
     target.iconCode = arrayIntOr(icons, sourceIndex, 44);
     target.precipChancePct = arrayIntOr(precipitation, sourceIndex, 0);
@@ -480,8 +491,11 @@ bool WeatherService::fetchOpenMeteoForecast(int& httpCode) {
 
     ForecastSlot& target = snapshot_.slots[slotIndex];
     target.valid = true;
-    snprintf(target.timeText, sizeof(target.timeText), "+%u h",
-             static_cast<unsigned>(hoursAhead));
+    const uint32_t slotEpoch = times[sourceIndex].as<uint32_t>();
+    if (!formatLocalClock(slotEpoch, target.timeText, sizeof(target.timeText))) {
+      snprintf(target.timeText, sizeof(target.timeText), "+%u h",
+               static_cast<unsigned>(hoursAhead));
+    }
     target.temperatureC = arrayIntOr(temperatures, sourceIndex, 0);
     target.precipChancePct = arrayIntOr(precipitation, sourceIndex, 0);
     target.iconCode = wmoToTwcIcon(arrayIntOr(weatherCodes, sourceIndex, 3));

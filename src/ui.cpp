@@ -697,10 +697,10 @@ bool begin() {
   applyPanelStyle(header, kHeaderBg, 0, 0x1E3849, 1);
   gClockLabel = makeLabel(header, 10, 7, 205, "--:--:--  --.--.----",
                           &lv_font_montserrat_16, 0xF2F7FA);
-  gHeaderLabel = makeLabel(header, 220, 10, 420, "Inicializace...",
+  // The header is intentionally display-only. Radar animation and data
+  // refreshes run automatically, so PAUZA/OBNOVIT controls are not shown.
+  gHeaderLabel = makeLabel(header, 220, 10, 570, "Inicializace...",
                            &lv_font_montserrat_12, 0xAFC4D1);
-  makeButton(header, 646, 70, 0x176B9A, "PAUZA", pauseEvent, &gPauseLabel);
-  makeButton(header, 722, 72, 0x247A4B, "OBNOVIT", refreshEvent);
 
   for (uint8_t i = 0; i < kMapBufferCount; ++i) {
     gMapCanvas[i] = lv_canvas_create(screen);

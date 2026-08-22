@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Focused static audit for v0.29.4 GitHub-ready CZ with LCD load guard."""
+"""Focused static audit for v0.29.6 GitHub-ready CZ screen cleanup."""
 from pathlib import Path
 import re
 import sys
@@ -42,8 +42,8 @@ ui_cpp = read("src/ui.cpp")
 patch = read("scripts/patch_display_driver.py")
 readme = read("README.md")
 
-require("0.29.4-display-load-guard" in version,
-        "firmware version is not v0.29.4-display-load-guard")
+require("0.29.6-screen-cleanup" in version,
+        "firmware version is not v0.29.6-screen-cleanup")
 require("DEFAULT_HOME_LAT" in config and "DEFAULT_HOME_LON" in config and
         "home_lat" in device_cpp and "home_lon" in device_cpp and
         "settings_.homeLat" in device_cpp and "settings_.homeLon" in device_cpp,

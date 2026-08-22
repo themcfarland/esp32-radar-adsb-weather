@@ -690,10 +690,12 @@ void redrawMap() {
                               adsb.snapshot(), mapViewport, aircraftAlert);
   }
   if (radarLayerEnabled && radarRendered) {
+    time_t radarFrameTimeUtc = 0;
+    radar.frameTimeUtc(radarFrame, radarFrameTimeUtc);
     MapRenderer::drawRadarAge(canvas, buffer, Config::MAP_W, Config::MAP_H,
-                              radar.frameName(radarFrame), radarFrame,
-                              radar.frameCount(), radar.sourceWidth(),
-                              radar.sourceHeight());
+                              radar.frameName(radarFrame), radarFrameTimeUtc,
+                              radarFrame, radar.frameCount(),
+                              radar.sourceWidth(), radar.sourceHeight());
   } else if (radarLayerEnabled) {
     MapRenderer::drawRadarMessage(canvas, buffer, Config::MAP_W,
                                   Config::MAP_H, radar.status());

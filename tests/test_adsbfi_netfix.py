@@ -9,7 +9,7 @@ config = (ROOT / "include" / "config.h").read_text()
 main = (ROOT / "src" / "main.cpp").read_text()
 version = (ROOT / "include" / "version.h").read_text()
 
-assert "0.29.4-display-load-guard" in version
+assert "0.29.6-screen-cleanup" in version
 assert "AircraftSnapshot* localCache_" in adsb_h
 assert "AircraftSnapshot* adsbFiCache_" in adsb_h
 assert "MALLOC_CAP_SPIRAM" in adsb

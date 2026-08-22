@@ -59,3 +59,7 @@ Volitelný zdroj vlastní PWS. Vyžaduje station ID a API key. Pokud není nakon
 ## Lokální BMP180
 
 Není internetovým zdrojem. Měří místní tlak a teplotu senzoru a používá se pro tlakový trend a lokální Zambretti výpočet.
+
+### Časová reprezentace
+
+Síťové zdroje mohou používat UTC nebo Unix epoch. Firmware je uchovává v původní časové reprezentaci pro správné řazení a synchronizaci, ale všechny hodinové údaje zobrazované uživateli převádí na český místní čas CET/CEST.

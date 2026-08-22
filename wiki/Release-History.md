@@ -1,3 +1,15 @@
+## 0.29.6 – Screen cleanup
+
+- odstraněna LCD tlačítka **PAUZA** a **OBNOVIT**,
+- radar a datové zdroje se dál aktualizují automaticky,
+- rozšířen prostor pro stavový text v horní liště.
+
+## 0.29.5-local-time
+
+- všechny uživatelsky zobrazené hodinové časy sjednoceny na CET/CEST
+- radar ČHMÚ: UTC timestamp -> lokální čas na mapě
+- předpovědní karty: lokální čas forecast slotu
+
 # Release history
 
 ## 0.29.4-display-load-guard

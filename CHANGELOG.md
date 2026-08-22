@@ -1,3 +1,18 @@
+## 0.29.6-screen-cleanup
+
+- Z hlavni LCD obrazovky odstranena tlacitka **PAUZA** a **OBNOVIT**.
+- Radarova animace a pravidelne aktualizace dat pokracuji automaticky bez zmeny intervalu.
+- Horni stavovy text byl rozsiren do uvolneneho prostoru.
+- Webova diagnostika a rucni servisni funkce zustavaji beze zmeny.
+
+## 0.29.5-local-time
+
+- sjednoceno zobrazování času na český lokální čas CET/CEST
+- čas radarového snímku ČHMÚ se převádí z UTC názvu souboru na místní čas
+- předpovědní karty zobrazují skutečný lokální čas vybraného forecast slotu
+- interní síťové timestampy a názvy radarových souborů zůstávají v UTC/epoch
+- přechod CET/CEST se řídí existujícím POSIX TZ pravidlem firmware
+
 # Changelog
 
 ## 0.29.4-display-load-guard

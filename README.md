@@ -1,6 +1,6 @@
 # Waveshare 7" Radar ČR + ADS-B + počasí
 
-Firmware **0.29.4-display-load-guard** je veřejná česká varianta projektu pro
+Firmware **0.29.6-screen-cleanup** je veřejná česká varianta projektu pro
 **Waveshare ESP32-S3-Touch-LCD-7 (800×480, ST7262, GT911, 8 MB OPI PSRAM)**.
 Po stažení z GitHubu neobsahuje osobní Wi-Fi, Weather Underground stanici ani
 lokální IP adresu ADS-B přijímače.
@@ -124,3 +124,8 @@ pro běžné první spuštění.
 - Weather Underground – volitelná PWS data.
 
 Dodržujte podmínky použití jednotlivých poskytovatelů dat.
+
+
+### v0.29.6
+
+Hlavni LCD obrazovka uz nezobrazuje tlacitka **PAUZA** a **OBNOVIT**. Radarova animace a obnovovani dat probiha automaticky.

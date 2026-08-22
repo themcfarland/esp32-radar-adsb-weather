@@ -1,6 +1,7 @@
 #include "map_renderer.h"
 
 #include <math.h>
+#include <time.h>
 
 #include "config.h"
 
@@ -929,23 +930,26 @@ void drawAircraft(lv_obj_t* canvas, uint16_t* buffer, uint16_t width,
 }
 
 void drawRadarAge(lv_obj_t* canvas, uint16_t* buffer, uint16_t width,
-                  uint16_t height, const char* frameName, uint8_t frameIndex,
-                  uint8_t frameCount, uint16_t sourceWidth,
-                  uint16_t sourceHeight) {
+                  uint16_t height, const char* frameName, time_t frameTimeUtc,
+                  uint8_t frameIndex, uint8_t frameCount,
+                  uint16_t sourceWidth, uint16_t sourceHeight) {
   if (!frameName || !frameName[0]) return;
-  String name(frameName);
-  String shown = "Radar --:-- UTC";
-  const int marker = name.indexOf("z_max3d.");
-  if (marker >= 0) {
-    const int dateStart = marker + 8;
-    if (name.length() >= dateStart + 13) {
-      const String time = name.substring(dateStart + 9, dateStart + 13);
-      shown = "Radar " + time.substring(0, 2) + ":" +
-              time.substring(2, 4) + " UTC";
+
+  // CHMI filenames are UTC, but every time shown to the user is converted
+  // through the configured Czech POSIX timezone (CET/CEST). The underlying
+  // radar timestamp remains UTC so ordering and downloads are unaffected.
+  char shown[40] = "Radar --:-- mistni";
+  if (frameTimeUtc > 1700000000) {
+    struct tm localFrame {};
+    localtime_r(&frameTimeUtc, &localFrame);
+    char localClock[24] = {0};
+    if (strftime(localClock, sizeof(localClock), "%H:%M %Z", &localFrame) > 0) {
+      snprintf(shown, sizeof(shown), "Radar %s", localClock);
     }
   }
+
   char detail[96];
-  snprintf(detail, sizeof(detail), "%s  %u/%u  %ux%u", shown.c_str(),
+  snprintf(detail, sizeof(detail), "%s  %u/%u  %ux%u", shown,
            static_cast<unsigned>(frameIndex + 1),
            static_cast<unsigned>(frameCount),
            static_cast<unsigned>(sourceWidth),

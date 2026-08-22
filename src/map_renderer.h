@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include <time.h>
 #include <lvgl.h>
 
 #include "map_viewport.h"
@@ -27,9 +28,9 @@ void drawAircraft(lv_obj_t* canvas, uint16_t* buffer, uint16_t width,
                   const MapViewport& viewport,
                   const AircraftAlertConfig& alert);
 void drawRadarAge(lv_obj_t* canvas, uint16_t* buffer, uint16_t width,
-                  uint16_t height, const char* frameName, uint8_t frameIndex,
-                  uint8_t frameCount, uint16_t sourceWidth,
-                  uint16_t sourceHeight);
+                  uint16_t height, const char* frameName, time_t frameTimeUtc,
+                  uint8_t frameIndex, uint8_t frameCount,
+                  uint16_t sourceWidth, uint16_t sourceHeight);
 void drawRadarMessage(lv_obj_t* canvas, uint16_t* buffer, uint16_t width,
                       uint16_t height, const char* message);
 
