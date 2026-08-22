@@ -3,7 +3,7 @@ from pathlib import Path
 root = Path(__file__).resolve().parents[1]
 src = (root / "src" / "adsb_service.cpp").read_text()
 version = (root / "include" / "version.h").read_text()
-assert "0.29.3-wifi-profiles" in version
+assert "0.29.4-display-load-guard" in version
 assert 'downloadJsonBody(http, "ADSB local", contentLength, body)' in src
 assert 'reinterpret_cast<char*>(body.data), body.size' in src
 assert 'http.useHTTP10(true)' not in src[src.index('bool AdsbService::fetchLocal'):src.index('bool AdsbService::fetchNetworkProvider')]

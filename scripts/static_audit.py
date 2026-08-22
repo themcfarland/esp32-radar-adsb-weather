@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Focused static audit for v0.29.3 GitHub-ready CZ with five Wi-Fi profiles."""
+"""Focused static audit for v0.29.4 GitHub-ready CZ with LCD load guard."""
 from pathlib import Path
 import re
 import sys
@@ -42,8 +42,8 @@ ui_cpp = read("src/ui.cpp")
 patch = read("scripts/patch_display_driver.py")
 readme = read("README.md")
 
-require("0.29.3-wifi-profiles" in version,
-        "firmware version is not v0.29.3-wifi-profiles")
+require("0.29.4-display-load-guard" in version,
+        "firmware version is not v0.29.4-display-load-guard")
 require("DEFAULT_HOME_LAT" in config and "DEFAULT_HOME_LON" in config and
         "home_lat" in device_cpp and "home_lon" in device_cpp and
         "settings_.homeLat" in device_cpp and "settings_.homeLon" in device_cpp,
@@ -433,9 +433,14 @@ require("downloadFileToMemory" in radar_cpp and "openRAM" in radar_cpp,
         "radar PNG is not downloaded and decoded from RAM")
 require("esp_lcd_rgb_panel_restart" in main,
         "manual/post-operation RGB DMA recovery is missing")
-require("periodic LCD watchdog" not in main and
-        "DISPLAY_SYNC_RECOVERY_MS" not in config,
-        "periodic LCD watchdog must remain disabled")
+require("DISPLAY_SYNC_RECOVERY_MS" not in config,
+        "blind periodic LCD recovery must remain disabled")
+require("DISPLAY_LOAD_GUARD_THRESHOLD_MS" in config and
+        "DISPLAY_LOAD_GUARD_COOLDOWN_MS" in config and
+        "scheduleDisplayRecoveryAfterLoad" in main,
+        "load-triggered LCD recovery guard is missing")
+require("loop blocked %u ms -> deferred RGB DMA resync" in main,
+        "LCD load guard diagnostics are missing")
 require(main.count("void setBacklight(bool on, const char* reason) {") == 1,
         "duplicate setBacklight definition detected")
 

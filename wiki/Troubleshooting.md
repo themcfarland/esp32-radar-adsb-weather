@@ -52,3 +52,7 @@ Zkontrolujte 3V3/GND, SDA GPIO8, SCL GPIO9 a čip ID `0x55`. Nepoužívejte 5 V,
 ## Lokální ADS-B přijímač není dostupný
 
 Pokud lokální receiver nepoužíváte, vypněte v Nastavení volbu **Používat lokální ADS-B přijímač**. Uložená URL se zachová a provoz pro ČR dál dodává adsb.fi. Pokud je receiver pouze dočasně nedostupný, firmware po třech neúspěšných pokusech automaticky používá 30s backoff a po obnovení spojení se vrátí k běžnému intervalu.
+
+## Obraz se při zátěži posune
+
+Od verze **0.29.4** firmware sleduje dlouhé blokace hlavní smyčky. Po operaci delší než 1,5 s automaticky naplánuje jednorázové srovnání RGB DMA, nejvýše jednou za 90 s. Nejde o periodický restart panelu. Pokud by obraz zůstal posunutý, ruční **Srovnat LCD** je stále na webové stránce v části Servis. V diagnostice lze zkontrolovat počet automatických zásahů a nejdelší zaznamenanou blokaci.

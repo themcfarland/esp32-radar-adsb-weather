@@ -145,6 +145,8 @@ struct RuntimeDiagnostics {
   uint32_t lastBarometerUpdateMs = 0;
   uint32_t lastDisplaySyncRecoveryMs = 0;
   uint32_t lcdResyncCount = 0;
+  uint32_t lcdLoadGuardTriggerCount = 0;
+  uint32_t longestLoopDurationMs = 0;
   uint32_t mapRedrawCount = 0;
   uint32_t lastMapRedrawDurationMs = 0;
   uint8_t radarFrameCount = 0;

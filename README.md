@@ -1,6 +1,6 @@
 # Waveshare 7" Radar ČR + ADS-B + počasí
 
-Firmware **0.29.3-wifi-profiles** je veřejná česká varianta projektu pro
+Firmware **0.29.4-display-load-guard** je veřejná česká varianta projektu pro
 **Waveshare ESP32-S3-Touch-LCD-7 (800×480, ST7262, GT911, 8 MB OPI PSRAM)**.
 Po stažení z GitHubu neobsahuje osobní Wi-Fi, Weather Underground stanici ani
 lokální IP adresu ADS-B přijímače.
@@ -16,6 +16,10 @@ lokální IP adresu ADS-B přijímače.
 > Při aktualizaci ze starší větve 0.28.x zůstane staré NVS zachováno, ale
 > souřadnice HOME dříve nebyly uživatelským nastavením. Po prvním spuštění
 > verze 0.29.0 proto zkontrolujte a uložte vlastní latitude/longitude ve webu.
+
+## Automatické srovnání LCD při vysoké zátěži
+
+Firmware sleduje délku hlavní programové smyčky. Pokud některá síťová nebo PSRAM operace zablokuje smyčku déle než 1,5 s, naplánuje se po dokončení operace jednorázový restart RGB DMA. Oprava používá stejný mechanismus jako tlačítko **Srovnat LCD** ve webu, ale neprovádí se periodicky. Mezi automatickými opravami je minimálně 90 s, aby se neopakovalo chování starších verzí, kde častý restart RGB DMA naopak posouvání obrazu zhoršoval. Ruční tlačítko zůstává dostupné.
 
 ## Více Wi-Fi míst
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.29.4-display-load-guard
+
+- Přidán automatický, zátěží řízený LCD recovery guard.
+- Pokud jedna iterace hlavní smyčky trvá déle než 1,5 s, po dokončení operace se naplánuje jednorázové `esp_lcd_rgb_panel_restart()`.
+- Automatické srovnání má 90s cooldown a není periodické; zachovává tak opravu z v0.20.1, která odstranila problematický 5s restart panelu.
+- Ruční webové tlačítko **Srovnat LCD** zůstává dostupné.
+- Diagnostika nově ukazuje počet automatických zásahů a nejdelší zaznamenanou blokaci hlavní smyčky.
+
 ## 0.29.3-wifi-profiles
 
 - Přidáno 5 Wi-Fi profilů (SSID, heslo, checkbox Použít).
@@ -205,6 +213,14 @@
 - The three-hour tendency continues to use unreduced station pressure and is not affected by altitude calibration.
 
 # Changelog
+
+## 0.29.4-display-load-guard
+
+- Přidán automatický, zátěží řízený LCD recovery guard.
+- Pokud jedna iterace hlavní smyčky trvá déle než 1,5 s, po dokončení operace se naplánuje jednorázové `esp_lcd_rgb_panel_restart()`.
+- Automatické srovnání má 90s cooldown a není periodické; zachovává tak opravu z v0.20.1, která odstranila problematický 5s restart panelu.
+- Ruční webové tlačítko **Srovnat LCD** zůstává dostupné.
+- Diagnostika nově ukazuje počet automatických zásahů a nejdelší zaznamenanou blokaci hlavní smyčky.
 
 ## 0.27.0 - BMP180 on shared display I2C
 

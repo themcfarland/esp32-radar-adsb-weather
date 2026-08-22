@@ -1,3 +1,10 @@
+# Release history
+
+## 0.29.4-display-load-guard
+- automatické jednorázové srovnání LCD po dlouhé blokující operaci,
+- 90s ochranný interval mezi automatickými zásahy,
+- diagnostika zátěže LCD recovery guardu.
+
 # Historie verzí
 
 ## 0.29.3-wifi-profiles

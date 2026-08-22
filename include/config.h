@@ -92,6 +92,14 @@ constexpr uint32_t BAROMETER_REFRESH_MS = 60UL * 1000UL;
 constexpr uint32_t PRESSURE_HISTORY_STEP_MS = 5UL * 60UL * 1000UL;
 constexpr uint32_t WIFI_RETRY_MS = 15UL * 1000UL;
 
+// RGB LCD recovery guard. A blind periodic DMA restart was intentionally
+// removed in v0.20.1 because frequent restarts made horizontal movement worse.
+// Instead, recovery is scheduled only after an unusually long main-loop
+// iteration (typically a slow HTTPS/PSRAM operation), and never more often
+// than the cooldown below.
+constexpr uint32_t DISPLAY_LOAD_GUARD_THRESHOLD_MS = 1500UL;
+constexpr uint32_t DISPLAY_LOAD_GUARD_COOLDOWN_MS = 90UL * 1000UL;
+
 constexpr char CONFIG_HOSTNAME[] = "radar-adsb";
 constexpr char CONFIG_AP_PREFIX[] = "Radar-ADSB-Setup";
 constexpr char CONFIG_AP_PASSWORD[] = "radarsetup";

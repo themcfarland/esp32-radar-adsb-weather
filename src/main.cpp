@@ -57,6 +57,8 @@ bool displayResyncPending = false;
 bool lastNetworkConnected = false;
 uint32_t lastMapViewChange = 0;
 uint32_t lcdResyncCount = 0;
+uint32_t lcdLoadGuardTriggerCount = 0;
+uint32_t longestLoopDurationMs = 0;
 uint32_t mapRedrawCount = 0;
 uint32_t lastMapRedrawDurationMs = 0;
 int lcdBacklightState = 1;
@@ -250,6 +252,27 @@ bool validateDisplay() {
 
 bool due(uint32_t now, uint32_t previous, uint32_t interval) {
   return static_cast<int32_t>(now - previous) >= static_cast<int32_t>(interval);
+}
+
+void scheduleDisplayRecoveryAfterLoad(uint32_t loopDurationMs) {
+  if (loopDurationMs > longestLoopDurationMs) {
+    longestLoopDurationMs = loopDurationMs;
+  }
+
+  if (!backlightOn || displayResyncPending) return;
+  if (loopDurationMs < Config::DISPLAY_LOAD_GUARD_THRESHOLD_MS) return;
+
+  const uint32_t now = millis();
+  if (lastDisplaySyncRecovery != 0 &&
+      !due(now, lastDisplaySyncRecovery, Config::DISPLAY_LOAD_GUARD_COOLDOWN_MS)) {
+    return;
+  }
+
+  displayResyncPending = true;
+  ++lcdLoadGuardTriggerCount;
+  DebugLog::printf(
+      "LCD load guard: loop blocked %u ms -> deferred RGB DMA resync\n",
+      static_cast<unsigned>(loopDurationMs));
 }
 
 void requestDisplaySyncRecovery(const char* reason) {
@@ -459,6 +482,8 @@ void updateRuntimeDiagnostics() {
   runtimeDiagnostics.lastBarometerUpdateMs = lastBarometerUpdate;
   runtimeDiagnostics.lastDisplaySyncRecoveryMs = lastDisplaySyncRecovery;
   runtimeDiagnostics.lcdResyncCount = lcdResyncCount;
+  runtimeDiagnostics.lcdLoadGuardTriggerCount = lcdLoadGuardTriggerCount;
+  runtimeDiagnostics.longestLoopDurationMs = longestLoopDurationMs;
   runtimeDiagnostics.mapRedrawCount = mapRedrawCount;
   runtimeDiagnostics.lastMapRedrawDurationMs = lastMapRedrawDurationMs;
   runtimeDiagnostics.radarFrameCount = radar.frameCount();
@@ -837,7 +862,8 @@ void setup() {
 }
 
 void loop() {
-  const uint32_t now = millis();
+  const uint32_t loopStartedMs = millis();
+  const uint32_t now = loopStartedMs;
   updateRuntimeDiagnostics();
   deviceConfig.loop();
 
@@ -1085,6 +1111,12 @@ void loop() {
         barometer.snapshot().delta3hHpa,
         barometer.snapshot().zambrettiCode);
   }
+
+  // Detect only genuinely long blocking iterations. This is deliberately not
+  // a timer-based panel restart: it reacts to heavy network/PSRAM work and
+  // then uses the same proven deferred recovery as the manual web button.
+  const uint32_t loopDurationMs = millis() - loopStartedMs;
+  scheduleDisplayRecoveryAfterLoad(loopDurationMs);
 
   delay(5);
 }
