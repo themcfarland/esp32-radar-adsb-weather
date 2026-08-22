@@ -13,6 +13,7 @@
 #include "debug_log.h"
 #include "device_config.h"
 #include "map_renderer.h"
+#include "network_worker.h"
 #include "lightning_service.h"
 #include "radar_service.h"
 #include "ui.h"
@@ -26,6 +27,7 @@ WeatherService weather("", "");
 RadarService radar;
 LightningService lightning;
 DeviceConfigService deviceConfig;
+NetworkWorker networkWorker;
 AircraftAlertConfig aircraftAlert;
 bool radarLayerEnabled = true;
 bool lightningLayerEnabled = true;
@@ -40,13 +42,18 @@ RuntimeDiagnostics runtimeDiagnostics;
 uint8_t radarFrame = 0;
 uint32_t lastAdsbUpdate = 0;
 uint32_t lastRadarUpdate = 0;
+uint32_t lastAdsbLocalRequest = 0;
+uint32_t lastAdsbInternetRequest = 0;
+uint32_t lastRadarRequest = 0;
+uint32_t lastCurrentWeatherRequest = 0;
+uint32_t lastForecastRequest = 0;
+uint32_t lastAdsbMerge = 0;
 uint32_t lastLightningUpdate = 0;
 uint32_t lastRadarAnimation = 0;
 uint32_t lastCurrentWeatherUpdate = 0;
 uint32_t lastForecastUpdate = 0;
 uint32_t lastAstronomyUpdate = 0;
 uint32_t lastBarometerUpdate = 0;
-uint32_t lastWifiRetry = 0;
 uint32_t lastHeaderUpdate = 0;
 uint32_t lastDebugHeartbeat = 0;
 uint32_t lastDisplaySyncRecovery = 0;
@@ -59,6 +66,8 @@ uint32_t lastMapViewChange = 0;
 uint32_t lcdResyncCount = 0;
 uint32_t lcdLoadGuardTriggerCount = 0;
 uint32_t longestLoopDurationMs = 0;
+uint32_t lastNetworkCompletedSeen = 0;
+uint32_t lastNetworkFailedSeen = 0;
 uint32_t mapRedrawCount = 0;
 uint32_t lastMapRedrawDurationMs = 0;
 int lcdBacklightState = 1;
@@ -113,6 +122,9 @@ void applyDeviceSettings() {
   homeLon = settings.homeLon;
   weather.setConfig(settings.wuApiKey, settings.wuStationId);
   weather.setLocation(homeLat, homeLon);
+  networkWorker.configure(settings.adsbUrl, settings.localAdsbEnabled,
+                          settings.wuApiKey, settings.wuStationId,
+                          homeLat, homeLon);
   const bool weatherLocationChanged =
       !isfinite(barometerWeatherLat) || !isfinite(barometerWeatherLon) ||
       fabsf(barometerWeatherLat - homeLat) > 0.00001f ||
@@ -275,6 +287,33 @@ void scheduleDisplayRecoveryAfterLoad(uint32_t loopDurationMs) {
       static_cast<unsigned>(loopDurationMs));
 }
 
+void scheduleDisplayRecoveryAfterNetwork(const NetworkWorker::Diagnostics& diag) {
+  if (diag.completedJobs == lastNetworkCompletedSeen) return;
+
+  const bool newFailure = diag.failedJobs != lastNetworkFailedSeen;
+  lastNetworkCompletedSeen = diag.completedJobs;
+  lastNetworkFailedSeen = diag.failedJobs;
+
+  if (!backlightOn || displayResyncPending) return;
+  if (!newFailure &&
+      diag.lastJobDurationMs < Config::NETWORK_LCD_RECOVERY_THRESHOLD_MS) {
+    return;
+  }
+
+  const uint32_t now = millis();
+  if (lastDisplaySyncRecovery != 0 &&
+      !due(now, lastDisplaySyncRecovery, Config::DISPLAY_LOAD_GUARD_COOLDOWN_MS)) {
+    return;
+  }
+
+  displayResyncPending = true;
+  ++lcdLoadGuardTriggerCount;
+  DebugLog::printf(
+      "LCD network guard: %s job %u ms -> deferred RGB DMA resync\n",
+      newFailure ? "failed/slow" : "slow",
+      static_cast<unsigned>(diag.lastJobDurationMs));
+}
+
 void requestDisplaySyncRecovery(const char* reason) {
   lv_disp_t* display = lv_disp_get_default();
   if (!display || !display->driver || !display->driver->user_data) return;
@@ -321,6 +360,7 @@ void handleOtaDisplayEvent(OtaDisplayEvent event, const char* filename,
                            uint32_t bytesWritten, int errorCode) {
   switch (event) {
     case OtaDisplayEvent::Start:
+      networkWorker.setPaused(true);
       otaScreenActive = true;
       // If the browser never starts the actual upload, return to the dashboard
       // automatically. UPLOAD_FILE_START cancels this timeout via Progress(0).
@@ -354,6 +394,7 @@ void handleOtaDisplayEvent(OtaDisplayEvent event, const char* filename,
       break;
 
     case OtaDisplayEvent::Failure:
+      networkWorker.setPaused(false);
       // Failure is delivered after WebServer::handleClient() returns. Restore
       // the backlight first, then repair/repaint the RGB panel once flash writes
       // are no longer active.
@@ -486,6 +527,19 @@ void updateRuntimeDiagnostics() {
   runtimeDiagnostics.longestLoopDurationMs = longestLoopDurationMs;
   runtimeDiagnostics.mapRedrawCount = mapRedrawCount;
   runtimeDiagnostics.lastMapRedrawDurationMs = lastMapRedrawDurationMs;
+  const NetworkWorker::Diagnostics networkDiag = networkWorker.diagnostics();
+  runtimeDiagnostics.networkWorkerRunning = networkDiag.running;
+  runtimeDiagnostics.networkWorkerPaused = networkDiag.paused;
+  runtimeDiagnostics.networkPendingJobs = networkDiag.pendingJobs;
+  runtimeDiagnostics.networkLastJobDurationMs = networkDiag.lastJobDurationMs;
+  runtimeDiagnostics.networkLongestJobDurationMs = networkDiag.longestJobDurationMs;
+  runtimeDiagnostics.networkCompletedJobs = networkDiag.completedJobs;
+  runtimeDiagnostics.networkFailedJobs = networkDiag.failedJobs;
+  runtimeDiagnostics.networkBackoffSkips = networkDiag.backoffSkips;
+  strlcpy(runtimeDiagnostics.networkActiveJob, networkDiag.activeJob,
+          sizeof(runtimeDiagnostics.networkActiveJob));
+  strlcpy(runtimeDiagnostics.networkLastResult, networkDiag.lastResult,
+          sizeof(runtimeDiagnostics.networkLastResult));
   runtimeDiagnostics.radarFrameCount = radar.frameCount();
   runtimeDiagnostics.currentRadarFrame = radarFrame;
   runtimeDiagnostics.forecastSlotCount = weatherData.forecastSlotCount;
@@ -709,21 +763,17 @@ void redrawMap() {
 }
 
 void performInitialUpdates() {
+  // Runtime Internet work is deliberately not executed here. Once the main
+  // screen is visible, NetworkWorker serializes all DNS/TLS/HTTP jobs on core 0
+  // and returns only completed snapshots to this task. This keeps startup and
+  // the RGB/LVGL task deterministic even when an external service is down.
   if (!deviceConfig.stationConnected()) {
     startupStatus("Wi-Fi data nejsou dostupna; konfiguracni AP je pripraveno", 88);
-    return;
+  } else {
+    startupStatus("Sitova data se nactou na pozadi po startu displeje", 68);
+    startupStatus("Pocasi a predpoved: pripravuji background worker", 75);
   }
 
-  DebugLog::println("Initial weather update started");
-  startupStatus("Nacitam aktualni pocasi (Open-Meteo / WU)...", 68);
-  weather.updateCurrent();
-  // Forecast always runs. WU is attempted when a key is present and
-  // Open-Meteo remains available without a WU subscription.
-  startupStatus("Nacitam predpoved +3 / +6 / +9 hodin...", 75);
-  weather.updateForecast();
-  updateWeatherUi();
-  lastCurrentWeatherUpdate = millis();
-  lastForecastUpdate = millis();
   if (barometerInitialized) {
     startupStatus("Aktualizuji tlak a Zambretti predpoved...", 81);
     updateBarometerSample(millis());
@@ -732,20 +782,9 @@ void performInitialUpdates() {
   }
   startupStatus("Pocitam Slunce, Mesic a astronomicke udaje...", 86);
   updateAstronomy();
-
-  startupStatus("Nacitam ADS-B data...", 91);
-  Serial.println(!deviceConfig.settings().localAdsbEnabled
-                     ? "Local ADS-B disabled; adsb.fi starts after dashboard..."
-                     : deviceConfig.settings().adsbUrl.isEmpty()
-                           ? "Local ADS-B enabled but URL is empty; adsb.fi starts after dashboard..."
-                           : "Loading local ADS-B; adsb.fi starts after dashboard...");
-  // Never block the startup screen on an external HTTPS provider. Load the
-  // fast LAN receiver now; the normal 2 s ADS-B loop performs the first
-  // adsb.fi request after the dashboard is already running.
-  adsb.update(false);
-  lastAdsbUpdate = millis();
-
+  startupStatus("ADS-B a sitove sluzby se spusti na pozadi...", 91);
 }
+
 }  // namespace
 
 void setup() {
@@ -858,6 +897,20 @@ void setup() {
   startupScreenActive = false;
   updateBacklightControl(millis());
 
+  if (networkWorker.begin(&radar)) {
+    applyDeviceSettings();
+    networkWorker.setPaused(!deviceConfig.stationConnected());
+    if (deviceConfig.stationConnected()) networkWorker.requestAll(true);
+    const uint32_t networkStart = millis();
+    lastAdsbLocalRequest = networkStart;
+    lastAdsbInternetRequest = networkStart;
+    lastCurrentWeatherRequest = networkStart;
+    lastForecastRequest = networkStart;
+    lastRadarRequest = networkStart;
+  } else {
+    DebugLog::println("Network worker unavailable; cached/offline data remain active");
+  }
+
   Serial.printf("Startup complete | heap %u kB | PSRAM %u kB\n",
                 static_cast<unsigned>(ESP.getFreeHeap() / 1024),
                 static_cast<unsigned>(ESP.getFreePsram() / 1024));
@@ -930,6 +983,11 @@ void loop() {
     const float previousHomeLon = homeLon;
     const AircraftAlertConfig previousAlert = aircraftAlert;
     applyDeviceSettings();
+    if (deviceConfig.stationConnected()) {
+      networkWorker.request(NetworkWorker::Job::AdsbLocal, true);
+      networkWorker.request(NetworkWorker::Job::WeatherCurrent, true);
+      networkWorker.request(NetworkWorker::Job::Forecast, true);
+    }
     const bool homeChanged = fabsf(previousHomeLat - homeLat) > 0.00001f ||
                              fabsf(previousHomeLon - homeLon) > 0.00001f;
     if (homeChanged) {
@@ -961,80 +1019,41 @@ void loop() {
 
   updateBacklightControl(now);
 
-  if (!deviceConfig.stationConnected() &&
-      due(now, lastWifiRetry, Config::WIFI_RETRY_MS)) {
-    lastWifiRetry = now;
-    deviceConfig.ensureNetwork(4000);
-  }
-
+  // Runtime Wi-Fi recovery is a non-blocking state machine. It never waits in
+  // a delay()/poll loop for an SSID, so a missing router cannot stall LVGL/RGB.
+  deviceConfig.serviceNetwork();
   const bool networkConnected = deviceConfig.stationConnected();
-  if (networkConnected && !lastNetworkConnected) {
-    DebugLog::println("WiFi restored: refreshing network data");
-    performInitialUpdates();
-    const bool radarChanged = radar.updateFrames();
-    if (radarChanged && !radar.animationCacheReady()) prepareRadarAnimation();
-    lastRadarUpdate = now;
-    radarFrame = 0;
-    lastRadarAnimation = now;
-    mapDirty = true;
-  }
-  lastNetworkConnected = networkConnected;
-
-  int16_t mapTapX = 0;
-  int16_t mapTapY = 0;
-  if (UI::consumeMapTap(mapTapX, mapTapY)) {
-    handleMapTap(mapTapX, mapTapY);
-  }
-
-  const bool manualRefresh = UI::consumeManualRefresh();
-  if (manualRefresh && deviceConfig.stationConnected()) {
-    DebugLog::println("Manual refresh requested");
-    weather.updateCurrent();
-    weather.updateForecast();
-    updateWeatherUi();
-    updateAstronomy();
-    adsb.update();
-    updateBarometerSample(millis());
-    lastBarometerUpdate = millis();
-    updatePressureUi();
-    if (radar.updateFrames()) {
-      if (!radar.animationCacheReady()) prepareRadarAnimation();
-      displayResyncPending = true;
+  if (networkConnected != lastNetworkConnected) {
+    if (networkConnected) {
+      DebugLog::println("WiFi restored: queueing network refresh without blocking UI");
+      networkWorker.setPaused(false);
+      applyDeviceSettings();
+      networkWorker.requestAll(true);
+      const uint32_t requested = millis();
+      lastAdsbLocalRequest = requested;
+      lastAdsbInternetRequest = requested;
+      lastRadarRequest = requested;
+      lastCurrentWeatherRequest = requested;
+      lastForecastRequest = requested;
+    } else {
+      DebugLog::println("WiFi lost: network worker paused; cached data remain visible");
+      networkWorker.setPaused(true);
     }
-    radarFrame = 0;
-    lastCurrentWeatherUpdate = lastForecastUpdate = millis();
-    lastAdsbUpdate = lastRadarUpdate = millis();
-    lastLightningUpdate = lightning.lastSuccessMs();
-    lastRadarAnimation = millis();
+    lastNetworkConnected = networkConnected;
+  }
+
+  // Import only completed background results. These operations are short
+  // cache copies/swaps in the main task; no socket/TLS/JSON work happens here.
+  bool aircraftChanged = false;
+  aircraftChanged |= networkWorker.consumeLocalAdsb(adsb);
+  aircraftChanged |= networkWorker.consumeInternetAdsb(adsb);
+  if (aircraftChanged) {
+    lastAdsbUpdate = adsb.lastSuccessMs();
     mapDirty = true;
   }
 
-  if (deviceConfig.stationConnected() &&
-      due(now, lastAdsbUpdate, Config::ADSB_REFRESH_MS)) {
-    lastAdsbUpdate = now;
-    adsb.update();
-    mapDirty = true;
-  }
-
-  if (deviceConfig.stationConnected() &&
-      due(now, lastRadarUpdate, Config::RADAR_REFRESH_MS)) {
-    lastRadarUpdate = now;
-    const bool radarChanged = radar.updateFrames();
-    if (radarChanged) {
-      if (!radar.animationCacheReady()) prepareRadarAnimation();
-      radarFrame = 0;
-      lastRadarAnimation = now;
-      mapDirty = true;
-      displayResyncPending = true;
-    }
-
-  }
-
-  if (deviceConfig.stationConnected() &&
-      due(now, lastCurrentWeatherUpdate,
-          Config::CURRENT_WEATHER_REFRESH_MS)) {
+  if (networkWorker.consumeCurrentWeather(weather)) {
     lastCurrentWeatherUpdate = now;
-    weather.updateCurrent();
     updateWeatherUi();
     if (barometerInitialized) {
       updateBarometerSample(now);
@@ -1043,11 +1062,79 @@ void loop() {
     }
   }
 
-  if (deviceConfig.stationConnected() &&
-      due(now, lastForecastUpdate, Config::FORECAST_REFRESH_MS)) {
+  if (networkWorker.consumeForecast(weather)) {
     lastForecastUpdate = now;
-    weather.updateForecast();
     updateWeatherUi();
+  }
+
+  if (networkWorker.consumeRadar(radar)) {
+    lastRadarUpdate = now;
+    radarFrame = 0;
+    lastRadarAnimation = now;
+    mapDirty = true;
+    // The cache swap itself is short, but one deferred VSYNC resync keeps the
+    // same safety net used after other large PSRAM operations.
+    displayResyncPending = true;
+  }
+
+  // Age out stale ADS-B caches even when a provider is down. No network access
+  // is performed by refreshMergedSnapshot().
+  if (due(now, lastAdsbMerge, 1000UL)) {
+    lastAdsbMerge = now;
+    adsb.refreshMergedSnapshot();
+  }
+
+  // Background networking no longer blocks loop(), so use worker completion
+  // statistics to detect exceptional TLS/PSRAM load that may still disturb the
+  // RGB DMA. Recovery remains cooldown-limited, never periodic.
+  scheduleDisplayRecoveryAfterNetwork(networkWorker.diagnostics());
+
+  int16_t mapTapX = 0;
+  int16_t mapTapY = 0;
+  if (UI::consumeMapTap(mapTapX, mapTapY)) {
+    handleMapTap(mapTapX, mapTapY);
+  }
+
+  const bool manualRefresh = UI::consumeManualRefresh();
+  if (manualRefresh && networkConnected) {
+    DebugLog::println("Manual refresh requested -> background queue");
+    networkWorker.requestAll(true);
+    lastAdsbLocalRequest = lastAdsbInternetRequest = now;
+    lastRadarRequest = lastCurrentWeatherRequest = lastForecastRequest = now;
+  }
+
+  // All runtime DNS/TCP/TLS/HTTP jobs below are only queued. NetworkWorker
+  // executes one at a time on core 0, preventing simultaneous TLS clients from
+  // exhausting internal heap or starving the RGB/LVGL task.
+  if (networkConnected && deviceConfig.settings().localAdsbEnabled &&
+      due(now, lastAdsbLocalRequest, Config::ADSB_REFRESH_MS)) {
+    lastAdsbLocalRequest = now;
+    networkWorker.request(NetworkWorker::Job::AdsbLocal);
+  }
+
+  if (networkConnected &&
+      due(now, lastAdsbInternetRequest, Config::ADSB_FI_REFRESH_MS)) {
+    lastAdsbInternetRequest = now;
+    networkWorker.request(NetworkWorker::Job::AdsbInternet);
+  }
+
+  if (networkConnected &&
+      due(now, lastRadarRequest, Config::RADAR_REFRESH_MS)) {
+    lastRadarRequest = now;
+    networkWorker.request(NetworkWorker::Job::Radar);
+  }
+
+  if (networkConnected &&
+      due(now, lastCurrentWeatherRequest,
+          Config::CURRENT_WEATHER_REFRESH_MS)) {
+    lastCurrentWeatherRequest = now;
+    networkWorker.request(NetworkWorker::Job::WeatherCurrent);
+  }
+
+  if (networkConnected &&
+      due(now, lastForecastRequest, Config::FORECAST_REFRESH_MS)) {
+    lastForecastRequest = now;
+    networkWorker.request(NetworkWorker::Job::Forecast);
   }
 
   if (due(now, lastBarometerUpdate, Config::BAROMETER_REFRESH_MS)) {

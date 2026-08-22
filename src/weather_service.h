@@ -35,6 +35,11 @@ class WeatherService {
     }
   }
   const WeatherSnapshot& snapshot() const { return snapshot_; }
+  // Apply a completed background fetch in the main/UI task. Failed worker
+  // requests never call these methods, so the last good weather data remain
+  // visible during outages.
+  void applyCurrentSnapshot(const WeatherSnapshot& source);
+  void applyForecastSnapshot(const WeatherSnapshot& source);
 
  private:
   bool fetchCurrent();

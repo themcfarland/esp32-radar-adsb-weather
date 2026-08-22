@@ -16,6 +16,23 @@ class RadarService {
   bool begin();
   bool updateFrames();
 
+  struct RuntimeFrameUpdate {
+    uint8_t* overlay = nullptr;
+    uint16_t sourceWidth = 0;
+    uint16_t sourceHeight = 0;
+    char name[40] = {};
+  };
+
+  enum class RuntimeFetchResult : uint8_t { Failed, NoChange, Ready };
+
+  // Runtime network-worker path. fetchRuntimeUpdate() performs HTTPS + PNG
+  // decode into a detached PSRAM overlay without modifying the active animation
+  // cache. applyRuntimeUpdate() is intentionally short and is called later from
+  // the UI/main task, so the RGB framebuffer is never touched by the network task.
+  RuntimeFetchResult fetchRuntimeUpdate(RuntimeFrameUpdate& pending);
+  bool applyRuntimeUpdate(RuntimeFrameUpdate& pending);
+  static void discardRuntimeUpdate(RuntimeFrameUpdate& pending);
+
   // Call after the RGB panel and compact animation cache are ready. Runtime
   // radar refreshes will then stay entirely in RAM/PSRAM and will not write
   // PNG files to LittleFS while the LCD DMA is active.

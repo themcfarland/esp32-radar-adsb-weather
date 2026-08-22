@@ -1,3 +1,17 @@
+# Changelog
+
+## 0.30.0-network-worker
+
+- Runtime DNS/TCP/TLS/HTTP přesunuty do samostatného FreeRTOS NetworkWorkeru na core 0.
+- V jednu chvíli běží jen jedna klasická HTTP/HTTPS síťová úloha.
+- Lokální ADS-B, adsb.fi, ČHMÚ radar, aktuální počasí a forecast jsou z hlavního loopu pouze plánovány.
+- Hotové ADS-B/weather/radar snapshoty se do UI aplikují až v hlavním vláknu.
+- ČHMÚ runtime update používá detached PSRAM overlay a krátký cache swap po dokončení downloadu/dekódování.
+- Chyby služeb používají per-service backoff; poslední platná data zůstávají viditelná.
+- Runtime Wi-Fi reconnect je neblokující stavový automat pro všech 5 profilů.
+- Přidána diagnostika síťového workeru a cooldown-limitovaný LCD recovery hint po velmi dlouhé/chybové síťové úloze.
+- Startup po inicializaci LCD už nečeká na internetové počasí/ADS-B; data se doplní na pozadí po zobrazení dashboardu.
+
 ## 0.29.6-screen-cleanup
 
 - Z hlavni LCD obrazovky odstranena tlacitka **PAUZA** a **OBNOVIT**.
@@ -12,8 +26,6 @@
 - předpovědní karty zobrazují skutečný lokální čas vybraného forecast slotu
 - interní síťové timestampy a názvy radarových souborů zůstávají v UTC/epoch
 - přechod CET/CEST se řídí existujícím POSIX TZ pravidlem firmware
-
-# Changelog
 
 ## 0.29.4-display-load-guard
 

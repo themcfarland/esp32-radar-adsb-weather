@@ -64,6 +64,10 @@ class DeviceConfigService {
   void loop();
   bool connectStation(uint32_t timeoutMs);
   void ensureNetwork(uint32_t timeoutMs);
+  // Non-blocking runtime reconnect state machine. Call every loop iteration;
+  // it tries the enabled profiles without delay()/wait loops and starts the
+  // configuration AP when a full cycle fails.
+  void serviceNetwork();
 
   bool stationConnected() const;
   bool portalActive() const { return portalActive_; }
@@ -128,4 +132,10 @@ class DeviceConfigService {
   String accessPointSsid_;
   int8_t activeWifiProfile_ = -1;
   size_t nextWifiProfileIndex_ = 0;
+  bool asyncReconnectActive_ = false;
+  size_t asyncReconnectVisited_ = 0;
+  size_t asyncReconnectIndex_ = 0;
+  int8_t asyncReconnectProfile_ = -1;
+  uint32_t asyncReconnectAttemptStartedMs_ = 0;
+  uint32_t asyncReconnectNextCycleMs_ = 0;
 };

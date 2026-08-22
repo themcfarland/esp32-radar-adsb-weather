@@ -13,4 +13,4 @@
 
 ---
 
-Aktuální veřejná větev: **0.29.3-wifi-profiles**
+Aktuální veřejná větev: **0.30.0-network-worker**

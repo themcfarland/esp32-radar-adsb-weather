@@ -13,6 +13,14 @@ class AdsbService {
   // interval. The public snapshot is a de-duplicated merge where local
   // receiver data always has priority for the same Mode-S/ICAO hex address.
   bool update(bool includeNetwork = true);
+  bool updateLocalNow() {
+    nextLocalAttemptMs_ = 0;
+    return update(false);
+  }
+  bool updateNetworkNow() {
+    lastAdsbFiAttemptMs_ = 0;
+    return update(true);
+  }
   void setAircraftUrl(const String& aircraftUrl) {
     if (aircraftUrl_ == aircraftUrl) return;
     aircraftUrl_ = aircraftUrl;
@@ -36,6 +44,13 @@ class AdsbService {
     return localEnabled_ ? lastLocalSuccessMs_ : 0U;
   }
   uint32_t lastNetworkSuccessMs() const { return lastAdsbFiSuccessMs_; }
+
+  // Network-worker integration. Background tasks fetch into private worker
+  // instances; the main task then imports only the completed snapshot and
+  // rebuilds the public merged view in a short, deterministic operation.
+  void applyLocalSnapshot(const AircraftSnapshot& source);
+  void applyNetworkSnapshot(const AircraftSnapshot& source);
+  void refreshMergedSnapshot();
 
  private:
   bool ensureCaches();

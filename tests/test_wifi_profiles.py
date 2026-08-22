@@ -5,7 +5,7 @@ h = (root / 'src/device_config.h').read_text()
 cpp = (root / 'src/device_config.cpp').read_text()
 version = (root / 'include/version.h').read_text()
 
-assert '0.29.6-screen-cleanup' in version
+assert '0.30.0-network-worker' in version
 assert 'WIFI_PROFILE_COUNT = 5' in h
 assert 'WifiProfile wifiProfiles[WIFI_PROFILE_COUNT]' in h
 assert 'wifi_multi' in cpp

@@ -149,6 +149,16 @@ struct RuntimeDiagnostics {
   uint32_t longestLoopDurationMs = 0;
   uint32_t mapRedrawCount = 0;
   uint32_t lastMapRedrawDurationMs = 0;
+  bool networkWorkerRunning = false;
+  bool networkWorkerPaused = false;
+  uint8_t networkPendingJobs = 0;
+  uint32_t networkLastJobDurationMs = 0;
+  uint32_t networkLongestJobDurationMs = 0;
+  uint32_t networkCompletedJobs = 0;
+  uint32_t networkFailedJobs = 0;
+  uint32_t networkBackoffSkips = 0;
+  char networkActiveJob[24] = "idle";
+  char networkLastResult[96] = "network worker ceka";
   uint8_t radarFrameCount = 0;
   uint8_t currentRadarFrame = 0;
   size_t lightningStrikeCount = 0;

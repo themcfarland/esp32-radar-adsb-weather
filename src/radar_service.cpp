@@ -584,6 +584,118 @@ bool RadarService::updateFramesInMemory() {
   return updateNewestFrameInMemory(latest[latestCount - 1]);
 }
 
+
+RadarService::RuntimeFetchResult RadarService::fetchRuntimeUpdate(
+    RuntimeFrameUpdate& pending) {
+  discardRuntimeUpdate(pending);
+
+  if (!animationCacheReady() || availableFrames_ != Config::RADAR_FRAME_COUNT ||
+      cacheWidth_ == 0 || cacheHeight_ == 0) {
+    snprintf(status_, sizeof(status_), "Radar: runtime cache neni pripraven");
+    return RuntimeFetchResult::Failed;
+  }
+
+  String latest[Config::RADAR_FRAME_COUNT];
+  uint8_t latestCount = 0;
+  if (!scanLatestFiles(latest, latestCount) || latestCount == 0) {
+    snprintf(status_, sizeof(status_), "Radar: index nedostupny, cache bezi");
+    return RuntimeFetchResult::Failed;
+  }
+
+  const String newestName = latest[latestCount - 1];
+  if (names_[availableFrames_ - 1] == newestName) {
+    snprintf(status_, sizeof(status_), "Radar: aktualni %u/%u",
+             static_cast<unsigned>(availableFrames_),
+             static_cast<unsigned>(Config::RADAR_FRAME_COUNT));
+    return RuntimeFetchResult::NoChange;
+  }
+
+  uint8_t* pngData = nullptr;
+  size_t pngSize = 0;
+  int code = 0;
+  const DownloadResult result =
+      downloadFileToMemory(newestName, pngData, pngSize, code);
+  if (result != DownloadResult::kOk) {
+    snprintf(status_, sizeof(status_), "Radar worker HTTP %d", code);
+    return RuntimeFetchResult::Failed;
+  }
+
+  const size_t overlayBytes = static_cast<size_t>(cacheWidth_) * cacheHeight_;
+  uint8_t* newOverlay = static_cast<uint8_t*>(heap_caps_malloc(
+      overlayBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+  if (!newOverlay) {
+    heap_caps_free(pngData);
+    snprintf(status_, sizeof(status_), "Radar: malo PSRAM pro worker snimek");
+    return RuntimeFetchResult::Failed;
+  }
+
+  // decodeMemoryToOverlay() uses these members as temporary PNG geometry.
+  // Preserve the active frame metadata; the UI task applies the new dimensions
+  // only together with the completed overlay.
+  const uint16_t activeSourceWidth = sourceWidth_;
+  const uint16_t activeSourceHeight = sourceHeight_;
+  const bool decoded = decodeMemoryToOverlay(
+      pngData, pngSize, newOverlay, cacheWidth_, cacheHeight_);
+  const uint16_t decodedSourceWidth = sourceWidth_;
+  const uint16_t decodedSourceHeight = sourceHeight_;
+  sourceWidth_ = activeSourceWidth;
+  sourceHeight_ = activeSourceHeight;
+  heap_caps_free(pngData);
+
+  if (!decoded) {
+    heap_caps_free(newOverlay);
+    return RuntimeFetchResult::Failed;
+  }
+
+  pending.overlay = newOverlay;
+  pending.sourceWidth = decodedSourceWidth;
+  pending.sourceHeight = decodedSourceHeight;
+  strlcpy(pending.name, newestName.c_str(), sizeof(pending.name));
+  snprintf(status_, sizeof(status_), "Radar: worker pripravil %s",
+           newestName.c_str());
+  return RuntimeFetchResult::Ready;
+}
+
+bool RadarService::applyRuntimeUpdate(RuntimeFrameUpdate& pending) {
+  if (!pending.overlay || !pending.name[0]) return false;
+  if (!animationCacheReady() || availableFrames_ != Config::RADAR_FRAME_COUNT) {
+    discardRuntimeUpdate(pending);
+    snprintf(status_, sizeof(status_), "Radar: worker commit odmitnut");
+    return false;
+  }
+
+  // Ignore an update that became obsolete while waiting for the UI task.
+  if (names_[availableFrames_ - 1] == pending.name) {
+    discardRuntimeUpdate(pending);
+    return false;
+  }
+
+  heap_caps_free(animationCache_[0]);
+  for (uint8_t i = 0; i + 1 < Config::RADAR_FRAME_COUNT; ++i) {
+    animationCache_[i] = animationCache_[i + 1];
+    names_[i] = names_[i + 1];
+  }
+  animationCache_[Config::RADAR_FRAME_COUNT - 1] = pending.overlay;
+  pending.overlay = nullptr;  // ownership moved into the active cache
+  names_[Config::RADAR_FRAME_COUNT - 1] = pending.name;
+  cachedFrames_ = availableFrames_;
+  sourceWidth_ = pending.sourceWidth;
+  sourceHeight_ = pending.sourceHeight;
+  snprintf(status_, sizeof(status_), "Radar: worker novy snimek");
+  pending.name[0] = '\0';
+  return true;
+}
+
+void RadarService::discardRuntimeUpdate(RuntimeFrameUpdate& pending) {
+  if (pending.overlay) {
+    heap_caps_free(pending.overlay);
+    pending.overlay = nullptr;
+  }
+  pending.sourceWidth = 0;
+  pending.sourceHeight = 0;
+  pending.name[0] = '\0';
+}
+
 bool RadarService::validatePngFile(const String& path) const {
   File file = LittleFS.open(path, FILE_READ);
   if (!file || file.size() < 100) {

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Focused static audit for v0.29.6 GitHub-ready CZ screen cleanup."""
+"""Focused static audit for v0.30.0 background network-worker architecture."""
 from pathlib import Path
 import re
 import sys
@@ -42,8 +42,8 @@ ui_cpp = read("src/ui.cpp")
 patch = read("scripts/patch_display_driver.py")
 readme = read("README.md")
 
-require("0.29.6-screen-cleanup" in version,
-        "firmware version is not v0.29.6-screen-cleanup")
+require("0.30.0-network-worker" in version,
+        "firmware version is not v0.30.0-network-worker")
 require("DEFAULT_HOME_LAT" in config and "DEFAULT_HOME_LON" in config and
         "home_lat" in device_cpp and "home_lon" in device_cpp and
         "settings_.homeLat" in device_cpp and "settings_.homeLon" in device_cpp,
@@ -79,11 +79,23 @@ require("WIFI_PROFILE_COUNT = 5" in device_h and
         "five-profile Wi-Fi storage/migration/failover UI is missing")
 
 network_block = adsb_cpp.split("bool AdsbService::fetchNetworkProvider", 1)[1].split("bool AdsbService::fetchAdsbFi", 1)[0]
+network_worker_h = read("src/network_worker.h")
+network_worker_cpp = read("src/network_worker.cpp")
 require("640U * 1024U" in network_block and "total=%u ac=%u" in network_block and
         "client.setTimeout(15000)" in network_block and "http.useHTTP10(true)" not in network_block and
         "downloadJsonBody" in adsb_cpp and "reinterpret_cast<char*>(body.data)" in network_block and
-        "adsb.update(false)" in main,
-        "ADS-B buffered HTTP/PSRAM startup-safe diagnostics are missing")
+        "AdsbInternet" in network_worker_cpp and "applyNetworkSnapshot" in adsb_cpp,
+        "ADS-B buffered HTTP/PSRAM worker integration is missing")
+require("xTaskCreatePinnedToCore" in network_worker_cpp and
+        '"network-worker"' in network_worker_cpp and
+        "WeatherCurrent" in network_worker_cpp and "Radar" in network_worker_cpp and
+        "requestAll" in main and "consumeRadar" in main and
+        "weather.updateCurrent();" not in main.split("void loop()",1)[1] and
+        "radar.updateFrames();" not in main.split("void loop()",1)[1],
+        "runtime network operations are not isolated in the background worker")
+require("serviceNetwork" in device_h and "WiFi async: starting reconnect cycle" in device_cpp and
+        "deviceConfig.serviceNetwork()" in main and "ensureNetwork(4000)" not in main,
+        "runtime Wi-Fi reconnect is still blocking")
 require("MAX_AIRCRAFT = 180" in config and "adsbFiCount" in models and
         "mlatCount" in models and "ADS-B: local + adsb.fi/adsb.lol" in map_cpp,
         "expanded hybrid ADS-B model or map attribution is missing")
@@ -323,7 +335,7 @@ require("Vytvoril OK5TVR" in ui_cpp and
         "gStartupProgressFill" in ui_cpp,
         "animated startup screen or creator credit is missing")
 require("Pripravuji radarovou animaci v PSRAM" in main and
-        "Nacitam ADS-B data" in main and
+        "ADS-B a sitove sluzby se spusti na pozadi" in main and
         "UI::showMainScreen()" in main,
         "startup progress stages or final transition are missing")
 require("gMainScreen = lv_obj_create(nullptr)" in ui_cpp,

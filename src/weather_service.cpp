@@ -117,6 +117,29 @@ bool WeatherService::hasUsableWuKey() const {
   return apiKey_.indexOf("YOUR_") < 0 && apiKey_.indexOf("CHANGE_ME") < 0;
 }
 
+
+void WeatherService::applyCurrentSnapshot(const WeatherSnapshot& source) {
+  snapshot_.stationLat = source.stationLat;
+  snapshot_.stationLon = source.stationLon;
+  snapshot_.current = source.current;
+  if (source.status[0]) {
+    strlcpy(snapshot_.status, source.status, sizeof(snapshot_.status));
+  }
+}
+
+void WeatherService::applyForecastSnapshot(const WeatherSnapshot& source) {
+  snapshot_.stationLat = source.stationLat;
+  snapshot_.stationLon = source.stationLon;
+  for (size_t i = 0; i < 3; ++i) snapshot_.slots[i] = source.slots[i];
+  snapshot_.forecastValid = source.forecastValid;
+  snapshot_.forecastSlotCount = source.forecastSlotCount;
+  strlcpy(snapshot_.forecastProduct, source.forecastProduct,
+          sizeof(snapshot_.forecastProduct));
+  if (source.status[0]) {
+    strlcpy(snapshot_.status, source.status, sizeof(snapshot_.status));
+  }
+}
+
 bool WeatherService::update() {
   const bool currentOk = updateCurrent();
   const bool forecastOk = updateForecast();

@@ -6,6 +6,7 @@
 #include <WiFiClientSecure.h>
 #include <esp_heap_caps.h>
 #include <strings.h>
+#include <string.h>
 #include <time.h>
 #include <new>
 
@@ -359,6 +360,39 @@ uint32_t AdsbService::lastSuccessMs() const {
   return static_cast<int32_t>(lastLocalSuccessMs_ - lastAdsbFiSuccessMs_) > 0
              ? lastLocalSuccessMs_
              : lastAdsbFiSuccessMs_;
+}
+
+
+void AdsbService::applyLocalSnapshot(const AircraftSnapshot& source) {
+  if (!ensureCaches()) return;
+  *localCache_ = source;
+  localCache_->valid = source.valid;
+  lastLocalSuccessMs_ = source.valid ? millis() : lastLocalSuccessMs_;
+  consecutiveLocalFailures_ = 0;
+  nextLocalAttemptMs_ = 0;
+  mergeCaches(millis());
+}
+
+void AdsbService::applyNetworkSnapshot(const AircraftSnapshot& source) {
+  if (!ensureCaches()) return;
+  *adsbFiCache_ = source;
+  adsbFiCache_->valid = source.valid;
+  if (source.valid) lastAdsbFiSuccessMs_ = millis();
+
+  if (strstr(source.endpoint, "adsb.lol")) {
+    strlcpy(networkSource_, "adsb.lol", sizeof(networkSource_));
+  } else {
+    strlcpy(networkSource_, "adsb.fi", sizeof(networkSource_));
+  }
+  if (source.status[0]) {
+    strlcpy(adsbFiStatus_, source.status, sizeof(adsbFiStatus_));
+  }
+  mergeCaches(millis());
+}
+
+void AdsbService::refreshMergedSnapshot() {
+  if (!ensureCaches()) return;
+  mergeCaches(millis());
 }
 
 bool AdsbService::update(bool includeNetwork) {

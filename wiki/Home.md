@@ -2,7 +2,7 @@
 
 Firmware pro **Waveshare ESP32-S3-Touch-LCD-7 (800×480, ST7262, GT911, CH422G, 8 MB flash / 8 MB OPI PSRAM)**. Česká veřejná větev je připravena tak, aby po stažení z GitHubu nebylo nutné upravovat osobní údaje ve zdrojovém kódu.
 
-**Aktuální veřejná verze:** `0.29.3-wifi-profiles`
+**Aktuální veřejná verze:** `0.30.0-network-worker`
 
 > Projekt je určen pro původní Waveshare ESP32-S3-Touch-LCD-7. Varianty 7B/7C mohou vyžadovat jiný ovladač displeje.
 
@@ -19,6 +19,7 @@ Firmware pro **Waveshare ESP32-S3-Touch-LCD-7 (800×480, ST7262, GT911, CH422G, 
 - Slunce, Měsíc a astronomické údaje,
 - dotykový zoom celé ČR / 50 / 25 / 10 km,
 - webové nastavení, diagnostika a OTA,
+- oddělený síťový worker: pomalý nebo nedostupný HTTP/TLS zdroj neblokuje hlavní obrazovku,
 - první konfigurace přes vlastní Wi-Fi AP,
 - automatický návrat do konfiguračního AP při nedostupné nebo chybně uložené Wi-Fi.
 

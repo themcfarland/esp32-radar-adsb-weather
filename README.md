@@ -1,9 +1,36 @@
 # Waveshare 7" Radar ČR + ADS-B + počasí
 
-Firmware **0.29.6-screen-cleanup** je veřejná česká varianta projektu pro
+Firmware **0.30.1-network-worker-buildfix** je veřejná česká varianta projektu pro
 **Waveshare ESP32-S3-Touch-LCD-7 (800×480, ST7262, GT911, 8 MB OPI PSRAM)**.
 Po stažení z GitHubu neobsahuje osobní Wi-Fi, Weather Underground stanici ani
 lokální IP adresu ADS-B přijímače.
+
+## Nová síťová architektura v0.30.0
+
+Od verze **0.30.0-network-worker** neběží runtime DNS/TCP/TLS/HTTP operace
+v hlavní Arduino smyčce. Samostatný FreeRTOS **NetworkWorker na core 0**
+seriově zpracovává:
+
+- lokální `aircraft.json`,
+- adsb.fi / adsb.lol,
+- aktuální počasí,
+- ČHMÚ radarový update,
+- hodinovou předpověď.
+
+V jednu chvíli se provádí pouze **jedna klasická HTTP/HTTPS úloha**. Hotová
+data se předají hlavnímu vláknu až po dokončení přenosu a parsování. LVGL,
+animace mapy, dotyk a hodiny proto pokračují i při timeoutu vzdáleného serveru.
+LightningMaps zůstává jako lehký realtime WebSocket obsluhovaný průběžně.
+
+Při chybě služby se zachovají poslední platná data a pro další pokusy se použije
+postupný backoff. Runtime reconnect Wi-Fi je nově **neblokující stavový automat**:
+pět uložených profilů se zkouší bez čekacích `while/delay` smyček v hlavním
+programu a při neúspěchu se dál spustí konfigurační AP.
+
+Webová diagnostika navíc ukazuje aktivní síťovou úlohu, počet čekajících úloh,
+čas poslední a nejdelší úlohy, počet chyb a backoffů. Pokud je background
+operace mimořádně dlouhá nebo selže, může se po dokončení naplánovat jeden
+RGB DMA resync; platí stejný minimální 90s cooldown jako u display load guardu.
 
 ## První spuštění
 
@@ -19,7 +46,12 @@ lokální IP adresu ADS-B přijímače.
 
 ## Automatické srovnání LCD při vysoké zátěži
 
-Firmware sleduje délku hlavní programové smyčky. Pokud některá síťová nebo PSRAM operace zablokuje smyčku déle než 1,5 s, naplánuje se po dokončení operace jednorázový restart RGB DMA. Oprava používá stejný mechanismus jako tlačítko **Srovnat LCD** ve webu, ale neprovádí se periodicky. Mezi automatickými opravami je minimálně 90 s, aby se neopakovalo chování starších verzí, kde častý restart RGB DMA naopak posouvání obrazu zhoršoval. Ruční tlačítko zůstává dostupné.
+Display load guard zůstává jako druhá ochranná vrstva. Hlavní smyčka sleduje
+vlastní neobvykle dlouhé blokace a NetworkWorker samostatně sleduje délku a
+úspěch síťových úloh. Resync se **neprovádí periodicky**: naplánuje se jen po
+výjimečně dlouhé (>= 8 s) nebo chybové background operaci, případně při dlouhé
+blokaci hlavního loopu. Mezi automatickými opravami je minimálně 90 s. Ruční
+tlačítko **Srovnat LCD** ve webu zůstává dostupné.
 
 ## Více Wi-Fi míst
 

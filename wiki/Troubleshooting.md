@@ -51,8 +51,12 @@ Zkontrolujte 3V3/GND, SDA GPIO8, SCL GPIO9 a čip ID `0x55`. Nepoužívejte 5 V,
 
 ## Lokální ADS-B přijímač není dostupný
 
-Pokud lokální receiver nepoužíváte, vypněte v Nastavení volbu **Používat lokální ADS-B přijímač**. Uložená URL se zachová a provoz pro ČR dál dodává adsb.fi. Pokud je receiver pouze dočasně nedostupný, firmware po třech neúspěšných pokusech automaticky používá 30s backoff a po obnovení spojení se vrátí k běžnému intervalu.
+Pokud lokální receiver nepoužíváte, vypněte v Nastavení volbu **Používat lokální ADS-B přijímač**. Uložená URL se zachová a provoz pro ČR dál dodává adsb.fi. Od verze 0.30.0 probíhá lokální HTTP požadavek v síťovém workeru; jeho timeout tedy nezastaví mapu ani LVGL. Při opakovaném výpadku se další pokusy automaticky odkládají.
+
+## Síťový zdroj je pomalý nebo nedostupný
+
+Od 0.30.0 se HTTP/TLS zdroje zpracovávají po jednom na pozadí. Poslední dobrá data zůstávají na obrazovce a vadný zdroj přejde do backoffu. Na `/diagnostics` sledujte **Aktivní úlohu**, **Poslední výsledek**, **Nejdelší úlohu**, **Chyby** a **Backoff**. Výpadek jednoho zdroje by neměl zastavit hodiny, radarovou animaci, dotyk ani překreslování mapy.
 
 ## Obraz se při zátěži posune
 
-Od verze **0.29.4** firmware sleduje dlouhé blokace hlavní smyčky. Po operaci delší než 1,5 s automaticky naplánuje jednorázové srovnání RGB DMA, nejvýše jednou za 90 s. Nejde o periodický restart panelu. Pokud by obraz zůstal posunutý, ruční **Srovnat LCD** je stále na webové stránce v části Servis. V diagnostice lze zkontrolovat počet automatických zásahů a nejdelší zaznamenanou blokaci.
+Od verze **0.30.0** jsou dlouhé runtime HTTP/TLS operace přesunuty mimo hlavní smyčku do `NetworkWorker`, takže výpadek adsb.fi, ČHMÚ, Open-Meteo/WU nebo lokálního ADS-B nemá čekáním blokovat LVGL/mapu. Stále zůstává load guard z 0.29.4 a navíc síťový guard po mimořádně dlouhé nebo chybové síťové úloze. Oba mechanismy mohou naplánovat jednorázové srovnání RGB DMA, nejvýše jednou za ochranný interval; nejde o periodický restart panelu. Pokud by obraz zůstal posunutý, ruční **Srovnat LCD** je stále na webu. V diagnostice zkontrolujte také kartu **Síťový worker** a položku nejdelší úlohy.

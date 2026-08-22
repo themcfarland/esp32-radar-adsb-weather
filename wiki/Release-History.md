@@ -1,3 +1,13 @@
+## 0.30.0 – Network worker
+
+- runtime DNS/TCP/TLS/HTTP operace přesunuty z hlavního `loop()` do samostatného FreeRTOS workeru na core 0,
+- velké HTTP/HTTPS úlohy se provádějí sériově, vždy pouze jedna současně,
+- per-service backoff při výpadku a zachování posledních platných dat,
+- neblokující runtime reconnect přes až 5 Wi-Fi profilů + failsafe AP,
+- radarový runtime download/decode probíhá do odděleného PSRAM overlaye a do aktivní animace se vloží krátkým swapem,
+- rozšířená webová diagnostika síťového workeru,
+- LCD recovery guard reaguje i na mimořádně dlouhou/chybovou síťovou úlohu.
+
 ## 0.29.6 – Screen cleanup
 
 - odstraněna LCD tlačítka **PAUZA** a **OBNOVIT**,

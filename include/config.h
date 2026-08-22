@@ -99,6 +99,10 @@ constexpr uint32_t WIFI_RETRY_MS = 15UL * 1000UL;
 // than the cooldown below.
 constexpr uint32_t DISPLAY_LOAD_GUARD_THRESHOLD_MS = 1500UL;
 constexpr uint32_t DISPLAY_LOAD_GUARD_COOLDOWN_MS = 90UL * 1000UL;
+// A background job does not lengthen Arduino loop(), but a very slow/failed
+// TLS transfer can still create PSRAM/Wi-Fi contention. Request one deferred
+// LCD resync only for exceptional jobs, using the same 90 s cooldown.
+constexpr uint32_t NETWORK_LCD_RECOVERY_THRESHOLD_MS = 8000UL;
 
 constexpr char CONFIG_HOSTNAME[] = "radar-adsb";
 constexpr char CONFIG_AP_PREFIX[] = "Radar-ADSB-Setup";
