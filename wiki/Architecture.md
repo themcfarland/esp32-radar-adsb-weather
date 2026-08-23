@@ -90,3 +90,8 @@ Požadavky se plánují přibližně v těchto intervalech; skutečné spuštěn
 LightningMaps WSS již neběží v hlavním Arduino loopu. Samostatný task `lightning-net` na core 0 obsluhuje WebSocket, heartbeat i reconnect. Hlavní loop pouze přebírá příznak nových blesků a kreslí data z chráněného PSRAM bufferu.
 
 Pokud jsou po dobu 3 minut současně stale adsb.fi, LightningMaps a také lokální ADS-B (je-li zapnutý), firmware považuje stav za zaseknutý síťový stack. Pozastaví NetworkWorker, krátce znovu inicializuje Wi-Fi, spustí recovery AP a znovu aktivuje HTTP listener. Cooldown dalšího takového zásahu je 10 minut.
+
+
+### ADS-B internet recovery
+
+Internetove ADS-B ma vlastni kratky backoff 15/30/max. 60 s. Pokud cache vyprsi, hlavni smycka nejpozdeji kazdych 30 s vynuti novy de-duplikovany NetworkWorker job. Lokalni ADS-B ma stale vyssi prioritu a zustava nezavisle funkcni.

@@ -28,6 +28,11 @@ class LightningService {
   // active. An already connected WSS stream remains serviced in the background.
   void setBulkNetworkBusy(bool busy) { bulkNetworkBusy_ = busy; }
 
+  // Release the persistent LightningMaps TLS/WebSocket transport for a short
+  // interval. NetworkWorker uses this only when internal RAM is too fragmented
+  // for a new outbound HTTPS handshake. Strike history remains in PSRAM.
+  void requestTransportYield(uint32_t holdMs);
+
   // Draw the current realtime lightning trail independently of the CHMI
   // radar animation. Colours are based only on strike age versus current time.
   bool renderLive(uint16_t* destination, uint16_t width, uint16_t height,
@@ -85,6 +90,9 @@ class LightningService {
   volatile bool socketStarted_ = false;
   volatile bool connected_ = false;
   volatile bool dataChanged_ = false;
+  volatile bool transportYieldRequested_ = false;
+  volatile uint32_t transportYieldHoldMs_ = 0;
+  volatile uint32_t transportYieldUntilMs_ = 0;
   uint32_t reconnectAtMs_ = 0;
   uint32_t lastSuccessMs_ = 0;
   uint32_t connectedAtMs_ = 0;

@@ -1,3 +1,25 @@
+# 0.30.8-tls-resource-guard-buildfix
+
+- Oprava kompilace `NetworkWorker::finishJob()`: formátovací řetězec `DebugLog::printf()` pro TLS DEFER měl omylem vložený fyzický konec řádku.
+- Síťová logika a TLS resource guard z 0.30.7 zůstávají funkčně beze změny.
+
+# 0.30.7-tls-resource-guard
+
+- Přidán preflight guard pro nové HTTPS/TLS handshaky podle volné interní RAM a největšího souvislého heap bloku.
+- Při nízké/fragmentované interní RAM se externí TLS job odloží o 5 s místo opakovaného HTTP -1 / mbedTLS connect fail.
+- TLS guard může požádat LightningMaps task o 20s uvolnění WSS transportu; historie blesků v PSRAM zůstává zachována.
+- Po čtyřech odkladech se povolí jeden bounded skutečný pokus, aby konzervativní práh nezpůsobil trvalé hladovění služby.
+- adsb.fi nyní ukládá skutečný HTTP kód z `http.GET()`; diagnostika už nezůstává na 0 při transportní chybě.
+- adsb.lol fallback je potlačen po DNS/TLS/socket chybách a po neúplném HTTP 200; používá se jen po skutečné HTTP 4xx/5xx odpovědi.
+- Po HTTPS operacích ADS-B, počasí a radaru se explicitně ukončí HTTP i secure klient a krátce se uvolní lwIP/TLS prostředky.
+- Diagnostika rozlišuje existenci NetworkWorker tasku od stavu idle a zobrazuje TLS guard: heap/blok, defery, forced attempts a WSS yieldy.
+
+## 0.30.6-adsbfi-recovery
+
+- adsb.fi backoff zkrácen na 15 / 30 / max. 60 s.
+- Při vypršení internetové ADS-B cache se nejpozději každých 30 s vynutí recovery request.
+- Per-source ADS-B diagnostika a ruční internetový refresh.
+
 ## 0.30.5-network-recovery
 
 - LightningMaps WebSocket byl přesunut z hlavního Arduino loopu do samostatného FreeRTOS tasku na core 0; DNS/TCP/TLS reconnect už nemůže zablokovat webové rozhraní ani UI.

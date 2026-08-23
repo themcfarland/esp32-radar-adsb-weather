@@ -82,6 +82,7 @@ class DeviceConfigService {
   AircraftAlertConfig alertConfig() const;
   bool consumeRuntimeSettingsChanged();
   bool consumeLcdResyncRequested();
+  bool consumeAdsbInternetRefreshRequested();
   bool consumeMapZoomRequested(MapZoomMode& mode);
   bool otaInProgress() const { return otaInProgress_; }
   void setOtaDisplayCallback(OtaDisplayCallback callback) {
@@ -99,6 +100,7 @@ class DeviceConfigService {
   void handleFactoryReset();
   void handleReboot();
   void handleLcdResync();
+  void handleAdsbInternetRefresh();
   void handleMapZoom();
   void handleOtaPrepare();
   void handleOtaUpload();
@@ -125,6 +127,7 @@ class DeviceConfigService {
   bool restartPending_ = false;
   bool runtimeSettingsChanged_ = false;
   bool lcdResyncRequested_ = false;
+  bool adsbInternetRefreshRequested_ = false;
   bool mapZoomRequestPending_ = false;
   MapZoomMode requestedMapZoom_ = MapZoomMode::Full;
   bool otaInProgress_ = false;

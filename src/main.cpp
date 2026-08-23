@@ -44,6 +44,7 @@ uint32_t lastAdsbUpdate = 0;
 uint32_t lastRadarUpdate = 0;
 uint32_t lastAdsbLocalRequest = 0;
 uint32_t lastAdsbInternetRequest = 0;
+uint32_t lastAdsbInternetRecoveryRequest = 0;
 uint32_t lastRadarRequest = 0;
 uint32_t lastCurrentWeatherRequest = 0;
 uint32_t lastForecastRequest = 0;
@@ -537,14 +538,40 @@ void updateRuntimeDiagnostics() {
   runtimeDiagnostics.mapRedrawCount = mapRedrawCount;
   runtimeDiagnostics.lastMapRedrawDurationMs = lastMapRedrawDurationMs;
   const NetworkWorker::Diagnostics networkDiag = networkWorker.diagnostics();
+  runtimeDiagnostics.networkWorkerAlive = networkDiag.taskAlive;
   runtimeDiagnostics.networkWorkerRunning = networkDiag.running;
   runtimeDiagnostics.networkWorkerPaused = networkDiag.paused;
   runtimeDiagnostics.networkPendingJobs = networkDiag.pendingJobs;
+  runtimeDiagnostics.tlsGuardLowMemory = networkDiag.tlsGuardLowMemory;
+  runtimeDiagnostics.tlsFreeInternal = networkDiag.tlsFreeInternal;
+  runtimeDiagnostics.tlsLargestInternalBlock = networkDiag.tlsLargestInternalBlock;
+  runtimeDiagnostics.tlsDeferredJobs = networkDiag.tlsDeferredJobs;
+  runtimeDiagnostics.tlsForcedAttempts = networkDiag.tlsForcedAttempts;
+  runtimeDiagnostics.tlsRecoveryRequests = networkDiag.tlsRecoveryRequests;
+  runtimeDiagnostics.tlsConsecutiveDefers = networkDiag.tlsConsecutiveDefers;
   runtimeDiagnostics.networkLastJobDurationMs = networkDiag.lastJobDurationMs;
   runtimeDiagnostics.networkLongestJobDurationMs = networkDiag.longestJobDurationMs;
   runtimeDiagnostics.networkCompletedJobs = networkDiag.completedJobs;
   runtimeDiagnostics.networkFailedJobs = networkDiag.failedJobs;
   runtimeDiagnostics.networkBackoffSkips = networkDiag.backoffSkips;
+  runtimeDiagnostics.adsbInternetFailures = networkDiag.adsbInternetFailures;
+  runtimeDiagnostics.adsbInternetLastAttemptMs = networkDiag.adsbInternetLastAttemptMs;
+  runtimeDiagnostics.adsbInternetLastSuccessMs = networkDiag.adsbInternetLastSuccessMs;
+  runtimeDiagnostics.adsbInternetLastDurationMs = networkDiag.adsbInternetLastDurationMs;
+  runtimeDiagnostics.adsbInternetNextRetryMs = networkDiag.adsbInternetNextRetryMs;
+  runtimeDiagnostics.adsbInternetHttpCode = networkDiag.adsbInternetHttpCode;
+  runtimeDiagnostics.adsbInternetLastAircraftCount = networkDiag.adsbInternetLastAircraftCount;
+  runtimeDiagnostics.adsbInternetLastMlatCount = networkDiag.adsbInternetLastMlatCount;
+  strlcpy(runtimeDiagnostics.adsbInternetSource, networkDiag.adsbInternetSource,
+          sizeof(runtimeDiagnostics.adsbInternetSource));
+  strlcpy(runtimeDiagnostics.adsbInternetResult, networkDiag.adsbInternetResult,
+          sizeof(runtimeDiagnostics.adsbInternetResult));
+  runtimeDiagnostics.adsbLocalFailures = networkDiag.adsbLocalFailures;
+  runtimeDiagnostics.adsbLocalLastAttemptMs = networkDiag.adsbLocalLastAttemptMs;
+  runtimeDiagnostics.adsbLocalLastSuccessMs = networkDiag.adsbLocalLastSuccessMs;
+  runtimeDiagnostics.adsbLocalLastDurationMs = networkDiag.adsbLocalLastDurationMs;
+  strlcpy(runtimeDiagnostics.adsbLocalResult, networkDiag.adsbLocalResult,
+          sizeof(runtimeDiagnostics.adsbLocalResult));
   strlcpy(runtimeDiagnostics.networkActiveJob, networkDiag.activeJob,
           sizeof(runtimeDiagnostics.networkActiveJob));
   strlcpy(runtimeDiagnostics.networkLastResult, networkDiag.lastResult,
@@ -915,6 +942,7 @@ void setup() {
     const uint32_t networkStart = millis();
     lastAdsbLocalRequest = networkStart;
     lastAdsbInternetRequest = networkStart;
+    lastAdsbInternetRecoveryRequest = 0;
     lastCurrentWeatherRequest = networkStart;
     lastForecastRequest = networkStart;
     lastRadarRequest = networkStart;
@@ -958,6 +986,14 @@ void loop() {
     return;
   }
 
+  // If the bulk TLS guard sees fragmented/low internal RAM, briefly drop the
+  // persistent LightningMaps WSS transport. Its strike history stays in PSRAM;
+  // the WSS reconnects automatically after the hold interval. This can free
+  // enough mbedTLS/socket memory for the next adsb.fi/CHMI/weather handshake.
+  if (networkWorker.consumeTlsRecoveryRequest()) {
+    lightning.requestTransportYield(Config::TLS_GUARD_LIGHTNING_YIELD_MS);
+  }
+
   // LightningMaps has its own background network task. Only pass the current
   // enable/bulk-network state here; no WSS/DNS/TLS code runs in the UI loop.
   lightning.setBulkNetworkBusy(networkWorker.diagnostics().running);
@@ -985,6 +1021,13 @@ void loop() {
 
   if (deviceConfig.consumeLcdResyncRequested()) {
     requestDisplaySyncRecovery("manual web request");
+  }
+
+  if (deviceConfig.consumeAdsbInternetRefreshRequested()) {
+    DebugLog::println("ADSB internet: manual recovery requested from web");
+    networkWorker.request(NetworkWorker::Job::AdsbInternet, true);
+    lastAdsbInternetRequest = now;
+    lastAdsbInternetRecoveryRequest = now;
   }
 
   if (deviceConfig.consumeRuntimeSettingsChanged()) {
@@ -1173,10 +1216,28 @@ void loop() {
     networkWorker.request(NetworkWorker::Job::AdsbLocal);
   }
 
-  if (networkConnected &&
-      due(now, lastAdsbInternetRequest, Config::ADSB_FI_REFRESH_MS)) {
-    lastAdsbInternetRequest = now;
-    networkWorker.request(NetworkWorker::Job::AdsbInternet);
+  if (networkConnected) {
+    const uint32_t lastInternetSuccess = adsb.lastNetworkSuccessMs();
+    const bool internetCacheExpired =
+        lastInternetSuccess == 0U ||
+        due(now, lastInternetSuccess, Config::ADSB_FI_CACHE_MAX_AGE_MS);
+
+    // If the live internet cache has already expired, do not let an old
+    // exponential backoff keep remote aircraft hidden for minutes. Force one
+    // bounded recovery attempt every 30 s until data return. request() still
+    // de-duplicates a job that is already queued/running.
+    if (internetCacheExpired &&
+        due(now, lastAdsbInternetRecoveryRequest,
+            Config::ADSB_FI_RECOVERY_RETRY_MS)) {
+      lastAdsbInternetRecoveryRequest = now;
+      lastAdsbInternetRequest = now;
+      if (networkWorker.request(NetworkWorker::Job::AdsbInternet, true)) {
+        DebugLog::println("ADSB internet: stale cache -> forced recovery request");
+      }
+    } else if (due(now, lastAdsbInternetRequest, Config::ADSB_FI_REFRESH_MS)) {
+      lastAdsbInternetRequest = now;
+      networkWorker.request(NetworkWorker::Job::AdsbInternet);
+    }
   }
 
   if (networkConnected &&

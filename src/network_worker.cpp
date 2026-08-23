@@ -189,6 +189,15 @@ bool NetworkWorker::busy() const {
   return value;
 }
 
+bool NetworkWorker::consumeTlsRecoveryRequest() {
+  if (!stateMutex_ || xSemaphoreTake(stateMutex_, pdMS_TO_TICKS(20)) != pdTRUE)
+    return false;
+  const bool requested = tlsRecoveryRequested_;
+  tlsRecoveryRequested_ = false;
+  xSemaphoreGive(stateMutex_);
+  return requested;
+}
+
 const char* NetworkWorker::jobName(Job job) {
   switch (job) {
     case Job::AdsbLocal: return "ADS-B local";
@@ -198,6 +207,76 @@ const char* NetworkWorker::jobName(Job job) {
     case Job::Forecast: return "forecast";
     default: return "unknown";
   }
+}
+
+bool NetworkWorker::jobUsesTls(Job job) {
+  return job == Job::WeatherCurrent || job == Job::AdsbInternet ||
+         job == Job::Radar || job == Job::Forecast;
+}
+
+bool NetworkWorker::tlsPreflight(Job job, char* result, size_t resultSize,
+                                 bool& deferred) {
+  deferred = false;
+  if (!jobUsesTls(job)) return true;
+
+  const uint32_t freeInternal = static_cast<uint32_t>(
+      heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+  const uint32_t largestInternal = static_cast<uint32_t>(
+      heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+  const bool lowMemory = freeInternal < Config::TLS_GUARD_MIN_FREE_INTERNAL ||
+                         largestInternal < Config::TLS_GUARD_MIN_LARGEST_BLOCK;
+  const uint8_t index = static_cast<uint8_t>(job);
+
+  if (!stateMutex_ || xSemaphoreTake(stateMutex_, pdMS_TO_TICKS(50)) != pdTRUE) {
+    snprintf(result, resultSize, "%s: TLS guard lock timeout", jobName(job));
+    deferred = true;
+    return false;
+  }
+
+  diagnostics_.tlsFreeInternal = freeInternal;
+  diagnostics_.tlsLargestInternalBlock = largestInternal;
+  diagnostics_.tlsGuardLowMemory = lowMemory;
+
+  if (!lowMemory) {
+    tlsDefers_[index] = 0;
+    diagnostics_.tlsConsecutiveDefers = 0;
+    xSemaphoreGive(stateMutex_);
+    return true;
+  }
+
+  if (tlsDefers_[index] < 255U) ++tlsDefers_[index];
+  diagnostics_.tlsConsecutiveDefers = tlsDefers_[index];
+
+  // The thresholds are deliberately conservative. To avoid starving a source
+  // forever on a device whose steady-state heap is just below the guard, allow
+  // one bounded real attempt after several deferrals. Fallback TLS handshakes
+  // are still suppressed by AdsbService when the first connection fails.
+  if (tlsDefers_[index] >= Config::TLS_GUARD_FORCE_AFTER_DEFERS) {
+    tlsDefers_[index] = 0;
+    diagnostics_.tlsConsecutiveDefers = 0;
+    ++diagnostics_.tlsForcedAttempts;
+    xSemaphoreGive(stateMutex_);
+    DebugLog::printf(
+        "TLS guard: forced %s attempt after deferrals | free=%u largest=%u\n",
+        jobName(job), static_cast<unsigned>(freeInternal),
+        static_cast<unsigned>(largestInternal));
+    return true;
+  }
+
+  ++diagnostics_.tlsDeferredJobs;
+  ++diagnostics_.tlsRecoveryRequests;
+  tlsRecoveryRequested_ = true;
+  xSemaphoreGive(stateMutex_);
+
+  snprintf(result, resultSize, "%s: TLS guard free=%u largest=%u",
+           jobName(job), static_cast<unsigned>(freeInternal),
+           static_cast<unsigned>(largestInternal));
+  DebugLog::printf(
+      "TLS guard: defer %s | free=%u largest=%u -> Lightning transport yield\n",
+      jobName(job), static_cast<unsigned>(freeInternal),
+      static_cast<unsigned>(largestInternal));
+  deferred = true;
+  return false;
 }
 
 bool NetworkWorker::selectNextJob(Job& job) {
@@ -253,9 +332,12 @@ uint32_t NetworkWorker::failureBackoffMs(Job job, uint8_t failures) const {
       maximum = 30000UL;
       break;
     case Job::AdsbInternet:
-      base = 30000UL;
-      maximum = 300000UL;
-      break;
+      // Internet aircraft are a live overlay. A five-minute backoff was long
+      // enough for the 120 s cache to expire, making all adsb.fi aircraft
+      // disappear even after a short provider/TLS outage. Cap recovery at 60 s.
+      if (failures <= 1U) return Config::ADSB_FI_BACKOFF_FIRST_MS;
+      if (failures == 2U) return Config::ADSB_FI_BACKOFF_SECOND_MS;
+      return Config::ADSB_FI_BACKOFF_MAX_MS;
     case Job::Radar:
       base = 60000UL;
       maximum = 300000UL;
@@ -280,13 +362,16 @@ uint32_t NetworkWorker::failureBackoffMs(Job job, uint8_t failures) const {
 }
 
 bool NetworkWorker::execute(Job job, char* result, size_t resultSize,
-                            bool& changed) {
+                            bool& changed, bool& deferred) {
   changed = false;
+  deferred = false;
   if (result && resultSize) result[0] = '\0';
   if (WiFi.status() != WL_CONNECTED) {
     snprintf(result, resultSize, "%s: Wi-Fi offline", jobName(job));
     return false;
   }
+
+  if (!tlsPreflight(job, result, resultSize, deferred)) return false;
 
   WorkerConfig cfg;
   if (!copyConfig(cfg)) {
@@ -399,7 +484,7 @@ bool NetworkWorker::execute(Job job, char* result, size_t resultSize,
   }
 }
 
-void NetworkWorker::finishJob(Job job, bool success, bool changed,
+void NetworkWorker::finishJob(Job job, bool success, bool changed, bool deferred,
                               uint32_t durationMs, const char* result) {
   if (!stateMutex_ || xSemaphoreTake(stateMutex_, portMAX_DELAY) != pdTRUE)
     return;
@@ -410,7 +495,48 @@ void NetworkWorker::finishJob(Job job, bool success, bool changed,
   diagnostics_.lastJobDurationMs = durationMs;
   if (durationMs > diagnostics_.longestJobDurationMs)
     diagnostics_.longestJobDurationMs = durationMs;
-  ++diagnostics_.completedJobs;
+  if (!deferred) ++diagnostics_.completedJobs;
+
+  const uint32_t finishedAt = millis();
+  const uint32_t startedAt = finishedAt - durationMs;
+  if (job == Job::AdsbInternet) {
+    if (!deferred) {
+      diagnostics_.adsbInternetLastAttemptMs = startedAt;
+      diagnostics_.adsbInternetLastDurationMs = durationMs;
+      diagnostics_.adsbInternetHttpCode = internetAdsbWorker_->lastNetworkHttpCode();
+      strlcpy(diagnostics_.adsbInternetSource, internetAdsbWorker_->networkSource(),
+              sizeof(diagnostics_.adsbInternetSource));
+    }
+    strlcpy(diagnostics_.adsbInternetResult, result ? result : "",
+            sizeof(diagnostics_.adsbInternetResult));
+    if (success && !deferred) {
+      diagnostics_.adsbInternetLastSuccessMs = finishedAt;
+      diagnostics_.adsbInternetLastAircraftCount =
+          internetAdsbWorker_->snapshot().adsbFiCount > 0
+              ? internetAdsbWorker_->snapshot().adsbFiCount
+              : internetAdsbWorker_->snapshot().count;
+      diagnostics_.adsbInternetLastMlatCount = internetAdsbWorker_->snapshot().mlatCount;
+    }
+  } else if (job == Job::AdsbLocal) {
+    diagnostics_.adsbLocalLastAttemptMs = startedAt;
+    diagnostics_.adsbLocalLastDurationMs = durationMs;
+    strlcpy(diagnostics_.adsbLocalResult, result ? result : "",
+            sizeof(diagnostics_.adsbLocalResult));
+    if (success) diagnostics_.adsbLocalLastSuccessMs = finishedAt;
+  }
+
+  if (deferred) {
+    nextAllowedMs_[index] = millis() + Config::TLS_GUARD_RETRY_MS;
+    snprintf(diagnostics_.lastResult, sizeof(diagnostics_.lastResult),
+             "%s: DEFER TLS %us %.48s", jobName(job),
+             static_cast<unsigned>(Config::TLS_GUARD_RETRY_MS / 1000UL),
+             result ? result : "");
+    diagnostics_.pendingJobs = countBits(pendingMask_);
+    xSemaphoreGive(stateMutex_);
+    DebugLog::printf("NET worker: %s | TLS DEFER | %u ms\n", jobName(job),
+                     static_cast<unsigned>(durationMs));
+    return;
+  }
 
   if (success) {
     failures_[index] = 0;
@@ -450,10 +576,11 @@ void NetworkWorker::taskLoop() {
       if (!selectNextJob(job)) break;
       const uint32_t started = millis();
       bool changed = false;
+      bool deferred = false;
       char result[96] = {};
-      const bool success = execute(job, result, sizeof(result), changed);
+      const bool success = execute(job, result, sizeof(result), changed, deferred);
       const uint32_t duration = millis() - started;
-      finishJob(job, success, changed, duration, result);
+      finishJob(job, success, changed, deferred, duration, result);
       vTaskDelay(pdMS_TO_TICKS(2));
     }
   }
@@ -525,8 +652,24 @@ NetworkWorker::Diagnostics NetworkWorker::diagnostics() const {
       xSemaphoreTake(stateMutex_, pdMS_TO_TICKS(20)) != pdTRUE) return copy;
   copy = diagnostics_;
   copy.pendingJobs = countBits(pendingMask_);
+  copy.taskAlive = task_ != nullptr;
   copy.running = runningJob_ >= 0;
   copy.paused = paused_;
+  copy.tlsFreeInternal = static_cast<uint32_t>(
+      heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+  copy.tlsLargestInternalBlock = static_cast<uint32_t>(
+      heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+  copy.tlsGuardLowMemory =
+      copy.tlsFreeInternal < Config::TLS_GUARD_MIN_FREE_INTERNAL ||
+      copy.tlsLargestInternalBlock < Config::TLS_GUARD_MIN_LARGEST_BLOCK;
+  const uint32_t now = millis();
+  const uint32_t internetDeadline =
+      nextAllowedMs_[static_cast<uint8_t>(Job::AdsbInternet)];
+  copy.adsbInternetNextRetryMs =
+      deadlinePending(now, internetDeadline) ? internetDeadline - now : 0U;
+  copy.adsbInternetFailures =
+      failures_[static_cast<uint8_t>(Job::AdsbInternet)];
+  copy.adsbLocalFailures = failures_[static_cast<uint8_t>(Job::AdsbLocal)];
   xSemaphoreGive(stateMutex_);
   return copy;
 }

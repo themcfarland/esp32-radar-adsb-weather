@@ -1,6 +1,6 @@
 # Waveshare 7" Radar ČR + ADS-B + počasí
 
-Firmware **0.30.5-network-recovery** je veřejná česká varianta projektu pro
+Firmware **0.30.8-tls-resource-guard-buildfix** je veřejná česká varianta projektu pro
 **Waveshare ESP32-S3-Touch-LCD-7 (800×480, ST7262, GT911, 8 MB OPI PSRAM)**.
 Po stažení z GitHubu neobsahuje osobní Wi-Fi, Weather Underground stanici ani
 lokální IP adresu ADS-B přijímače.
@@ -32,6 +32,22 @@ Webová diagnostika navíc ukazuje aktivní síťovou úlohu, počet čekající
 operace mimořádně dlouhá nebo selže, může se po dokončení naplánovat jeden
 RGB DMA resync; platí stejný minimální 90s cooldown jako u display load guardu.
 
+
+## TLS resource guard v0.30.7
+
+Dlouhodobý provoz ukázal, že několik MB volné PSRAM nestačí k zaručení nového
+HTTPS spojení: mbedTLS potřebuje také dostatečně velký souvislý blok interní
+RAM. Před každým externím HTTPS jobem proto NetworkWorker kontroluje volnou
+interní RAM a největší souvislý blok. Při nízké/fragmentované RAM se job na
+5 s odloží a LightningMaps na 20 s uvolní svůj WSS/TLS transport; historie
+blesků v PSRAM zůstává zachována. Po čtyřech odkladech se povolí jeden
+omezený skutečný pokus, aby konzervativní práh nemohl zdroj trvale vyhladovět.
+
+Po každém HTTPS requestu se explicitně ukončí HTTP i TCP/TLS klient a nechá se
+krátký čas lwIP na vrácení socketových bufferů. adsb.lol se už nespouští po
+DNS/TLS/socket chybě adsb.fi ani po neúplném HTTP 200 těle; fallback se použije
+jen při skutečné HTTP chybě serveru (4xx/5xx). Diagnostika ukazuje stav TLS
+guardu, interní heap/blok, počty odkladů, vynucených pokusů a WSS yieldů.
 
 ## Recovery při globálním síťovém výpadku
 
@@ -176,3 +192,8 @@ V sekci HOME jsou ctyri tlacitka `Cela CR / 50 km / 25 km / 10 km`. Stisk tlacit
 ### Odolnost ADS-B při výpadku jiného serveru
 
 Síťové operace jsou serializované. Verze 0.30.4 proto chrání ADS-B před pomalým ČHMÚ/HTTPS jobem: lokální a internetový ADS-B mají nejvyšší prioritu, radarový index má krátký hard limit a poslední dobré aircraft snapshoty se po krátkou dobu zachovají. Stav `Radar: index nedostupny, cache bezi` tedy znamená pouze problém s aktualizací radarového indexu; nemá vymazat letadla.
+
+
+## ADS-B internet recovery (0.30.6)
+
+Internetove ADS-B (`adsb.fi`, pripadne rychly fallback `adsb.lol`) ma kratky recovery backoff 15/30/max. 60 s. Pokud posledni internetovy snapshot zestarnul nad platnost cache, firmware vynuti nejpozdeji kazdych 30 s novy pokus. Webova diagnostika zobrazuje stav lokalniho a internetoveho ADS-B oddelene a umoznuje rucne zaradit okamzity internetovy refresh bez restartu zarizeni.

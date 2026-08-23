@@ -14,6 +14,12 @@
 namespace {
 constexpr uint8_t kForecastHours[3] = {3, 6, 9};
 
+void releaseSecureHttp(HTTPClient& http, WiFiClientSecure& client) {
+  http.end();
+  client.stop();
+  delay(Config::TLS_POST_REQUEST_SETTLE_MS);
+}
+
 bool getHttpsJson(const String& url, DynamicJsonDocument& doc, int& httpCode) {
   WiFiClientSecure client;
   client.setInsecure();
@@ -30,12 +36,12 @@ bool getHttpsJson(const String& url, DynamicJsonDocument& doc, int& httpCode) {
   http.addHeader("Accept-Encoding", "identity");
   httpCode = http.GET();
   if (httpCode != HTTP_CODE_OK) {
-    http.end();
+    releaseSecureHttp(http, client);
     return false;
   }
 
   const DeserializationError err = deserializeJson(doc, http.getStream());
-  http.end();
+  releaseSecureHttp(http, client);
   if (err) {
     httpCode = -2;
     return false;
@@ -260,12 +266,12 @@ bool WeatherService::fetchOpenMeteoCurrent(int& httpCode) {
   http.addHeader("Accept-Encoding", "identity");
   httpCode = http.GET();
   if (httpCode != HTTP_CODE_OK) {
-    http.end();
+    releaseSecureHttp(http, client);
     return false;
   }
 
   const String payload = http.getString();
-  http.end();
+  releaseSecureHttp(http, client);
   if (payload.isEmpty()) {
     httpCode = -2;
     return false;
@@ -333,7 +339,7 @@ bool WeatherService::fetchHourlyForecast(const char* duration, int& httpCode) {
   httpCode = http.GET();
   DebugLog::printf("Forecast WU %s: HTTP %d\n", duration, httpCode);
   if (httpCode != HTTP_CODE_OK) {
-    http.end();
+    releaseSecureHttp(http, client);
     return false;
   }
 
@@ -346,7 +352,7 @@ bool WeatherService::fetchHourlyForecast(const char* duration, int& httpCode) {
   DynamicJsonDocument doc(14 * 1024);
   const DeserializationError err = deserializeJson(
       doc, http.getStream(), DeserializationOption::Filter(filter));
-  http.end();
+  releaseSecureHttp(http, client);
   if (err) {
     DebugLog::printf("Forecast WU %s: JSON error %s\n", duration, err.c_str());
     httpCode = -2;
@@ -444,7 +450,7 @@ bool WeatherService::fetchOpenMeteoForecast(int& httpCode) {
       DebugLog::printf("Forecast Open-Meteo: error body: %s\n",
                        responsePreview(errorBody).c_str());
     }
-    http.end();
+    releaseSecureHttp(http, client);
     return false;
   }
 
@@ -452,7 +458,7 @@ bool WeatherService::fetchOpenMeteoForecast(int& httpCode) {
   // sees the data. The 12-hour response is only a few kilobytes and the
   // forecast is downloaded once per hour.
   String payload = http.getString();
-  http.end();
+  releaseSecureHttp(http, client);
   DebugLog::printf("Forecast Open-Meteo: body received, %u bytes\n",
                    static_cast<unsigned>(payload.length()));
   if (payload.isEmpty()) {

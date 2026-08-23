@@ -1,3 +1,22 @@
+## 0.30.8 - TLS resource guard buildfix
+
+- Oprava build chyby v logovacím volání NetworkWorkeru.
+- Funkčně shodné síťové chování jako 0.30.7.
+
+## 0.30.7 - TLS resource guard
+
+- preflight kontrola interní RAM před novým HTTPS/TLS spojením,
+- odklad TLS jobu při fragmentovaném heapu a krátký LightningMaps WSS yield,
+- explicitní ukončení HTTP/TLS klientů po requestu,
+- adsb.lol fallback jen po skutečné HTTP 4xx/5xx chybě adsb.fi,
+- rozšířená TLS/heap diagnostika.
+
+## 0.30.6 - ADS-B internet recovery
+
+- kratky adsb.fi backoff 15/30/60 s
+- recovery request po vyprseni cache nejpozdeji po 30 s
+- per-source ADS-B diagnostika a rucni internetovy refresh
+
 ## 0.30.5-network-recovery
 - LightningMaps WSS přesunut do samostatného tasku.
 - Globální síťový watchdog a recovery AP při zaseknutém Wi-Fi/TCP/TLS stacku.

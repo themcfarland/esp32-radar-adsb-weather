@@ -13,6 +13,12 @@ RadarService* RadarService::active_ = nullptr;
 File RadarService::activeFile_;
 
 namespace {
+
+void releaseSecureHttp(HTTPClient& http, WiFiClientSecure& client) {
+  http.end();
+  client.stop();
+  delay(Config::TLS_POST_REQUEST_SETTLE_MS);
+}
 constexpr char kRadarPrefix[] = "pacz2gmaps3.z_max3d.";
 constexpr char kCacheIndexPath[] = "/radar_names.txt";
 constexpr time_t kValidEpoch = 1700000000;
@@ -187,8 +193,7 @@ bool RadarService::scanLatestFiles(
   const int code = http.GET();
   if (code != HTTP_CODE_OK) {
     snprintf(status_, sizeof(status_), "Radar index HTTP %d", code);
-    http.end();
-    client.stop();
+    releaseSecureHttp(http, client);
     return false;
   }
 
@@ -240,8 +245,7 @@ bool RadarService::scanLatestFiles(
     }
   }
 
-  http.end();
-  client.stop();
+  releaseSecureHttp(http, client);
   if (count == 0) {
     snprintf(status_, sizeof(status_), "Radar: prazdny index");
     return false;
@@ -271,11 +275,11 @@ RadarService::DownloadResult RadarService::downloadFile(
   http.addHeader("Accept-Encoding", "identity");
   httpCode = http.GET();
   if (httpCode == HTTP_CODE_NOT_FOUND) {
-    http.end();
+    releaseSecureHttp(http, client);
     return DownloadResult::kNotFound;
   }
   if (httpCode != HTTP_CODE_OK) {
-    http.end();
+    releaseSecureHttp(http, client);
     return DownloadResult::kFailed;
   }
 
@@ -283,7 +287,7 @@ RadarService::DownloadResult RadarService::downloadFile(
   removeIfExists(tempPath);
   File output = LittleFS.open(tempPath, FILE_WRITE);
   if (!output) {
-    http.end();
+    releaseSecureHttp(http, client);
     httpCode = -1001;
     return DownloadResult::kFailed;
   }
@@ -323,7 +327,7 @@ RadarService::DownloadResult RadarService::downloadFile(
   }
 
   output.close();
-  http.end();
+  releaseSecureHttp(http, client);
 
   if (written < 100 || (remaining > 0) || !validatePngFile(tempPath)) {
     removeIfExists(tempPath);
@@ -367,21 +371,18 @@ RadarService::DownloadResult RadarService::downloadFileToMemory(
   http.addHeader("Connection", "close");
   httpCode = http.GET();
   if (httpCode == HTTP_CODE_NOT_FOUND) {
-    http.end();
-    client.stop();
+    releaseSecureHttp(http, client);
     return DownloadResult::kNotFound;
   }
   if (httpCode != HTTP_CODE_OK) {
-    http.end();
-    client.stop();
+    releaseSecureHttp(http, client);
     return DownloadResult::kFailed;
   }
 
   constexpr size_t kMaximumPngBytes = 2U * 1024U * 1024U;
   const int declaredLength = http.getSize();
   if (declaredLength > static_cast<int>(kMaximumPngBytes)) {
-    http.end();
-    client.stop();
+    releaseSecureHttp(http, client);
     httpCode = -1101;
     return DownloadResult::kFailed;
   }
@@ -392,8 +393,7 @@ RadarService::DownloadResult RadarService::downloadFileToMemory(
   data = static_cast<uint8_t*>(heap_caps_malloc(
       capacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
   if (!data) {
-    http.end();
-    client.stop();
+    releaseSecureHttp(http, client);
     httpCode = -1102;
     return DownloadResult::kFailed;
   }
@@ -421,8 +421,7 @@ RadarService::DownloadResult RadarService::downloadFileToMemory(
     delay(2);
   }
 
-  http.end();
-  client.stop();
+  releaseSecureHttp(http, client);
 
   static constexpr uint8_t kPngSignature[8] = {
       0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};

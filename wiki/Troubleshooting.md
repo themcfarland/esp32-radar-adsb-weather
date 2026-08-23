@@ -69,3 +69,17 @@ Tato hláška patří pouze radaru ČHMÚ. Od 0.30.4 nesmí krátký výpadek ra
 ## Web nejde otevřít a několik datových zdrojů současně stojí
 
 Od v0.30.5 je LightningMaps WSS mimo hlavní UI loop. Pokud navíc firmware zjistí současný výpadek několika nezávislých zdrojů při stále hlášeném `WL_CONNECTED`, provede Wi-Fi recovery a zpřístupní AP `Radar-ADSB-Setup-XXXX` (`192.168.4.1`, heslo `radarsetup`). Tento mechanismus je záměrně konzervativní a má 10min cooldown.
+
+
+### Lokalni letadla jsou videt, ale adsb.fi ne
+
+V Diagnostice zkontrolujte blok ADS-B internet. Zobrazuje posledni zdroj, HTTP kod, stari pokusu/uspechu, pocet po sobe jdoucich chyb a cas do dalsiho pokusu. Tlacitko **Obnovit internetove ADS-B** zrusi aktualni backoff a okamzite zaradi novy request bez restartu Wi-Fi. Automaticky backoff je omezen na 60 s a pri vyprseni internetove cache se recovery pokus vynuti nejpozdeji kazdych 30 s.
+
+## Internetové HTTPS zdroje přestanou fungovat, lokální ADS-B běží
+
+Od v0.30.7 sledujte v Diagnostice položku **TLS guard**. Pokud je interní heap
+nebo největší souvislý blok nízký, firmware externí HTTPS request dočasně
+odloží a může krátce uvolnit LightningMaps WSS transport. Typický stav je
+`TLS guard: NIZKA / FRAGMENTOVANA RAM`; po uvolnění paměti se další pokus
+provede automaticky. adsb.lol se po transportní chybě adsb.fi nespouští
+okamžitě, aby nevznikl druhý náročný TLS handshake.

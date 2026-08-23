@@ -12,6 +12,7 @@ assert "void forceReconnect(const char* reason);" in hdr
 assert "lastValidFrameMs_ = lastSuccessMs_;" in cpp
 assert 'forceReconnect("no first JSON frame")' in cpp
 assert 'forceReconnect("no valid JSON data")' in cpp
-assert "valid envelope counts even when strokes[] is empty" in cpp
+assert "lastSuccessMs_ = millis();" in cpp
+assert "lastValidFrameMs_ = lastSuccessMs_;" in cpp
 assert "Older trail entries are deliberately point-like" in cpp
 print("LIGHTNING JSON STREAM GUARD TEST OK")

@@ -102,6 +102,12 @@ bool LightningService::loop(bool enabled) {
   return changed;
 }
 
+void LightningService::requestTransportYield(uint32_t holdMs) {
+  if (holdMs == 0U) holdMs = Config::TLS_GUARD_LIGHTNING_YIELD_MS;
+  transportYieldHoldMs_ = holdMs;
+  transportYieldRequested_ = true;
+}
+
 void LightningService::taskEntry(void* context) {
   static_cast<LightningService*>(context)->taskLoop();
 }
@@ -109,8 +115,38 @@ void LightningService::taskEntry(void* context) {
 void LightningService::taskLoop() {
   uint32_t lastPruneMs = 0;
   for (;;) {
+    const uint32_t loopNow = millis();
+    if (transportYieldRequested_) {
+      transportYieldRequested_ = false;
+      const uint32_t holdMs = transportYieldHoldMs_ > 0U
+                                  ? transportYieldHoldMs_
+                                  : Config::TLS_GUARD_LIGHTNING_YIELD_MS;
+      transportYieldUntilMs_ = loopNow + holdMs;
+      reconnectAtMs_ = transportYieldUntilMs_;
+      if (socketStarted_ || connected_) {
+        forcedDisconnect_ = true;
+        webSocket_.disconnect();
+        socketStarted_ = false;
+        connected_ = false;
+        connectedAtMs_ = 0;
+        lastValidFrameMs_ = 0;
+      }
+      snprintf(status_, sizeof(status_),
+               "Blesky: WSS docasne uvolnen pro TLS (%us)",
+               static_cast<unsigned>(holdMs / 1000UL));
+      Serial.printf("Lightning: transport yield %u ms for TLS heap recovery\n",
+                    static_cast<unsigned>(holdMs));
+    }
+
     const bool enabled = enabledRequested_;
     const bool wifiReady = WiFi.status() == WL_CONNECTED;
+
+    if (transportYieldUntilMs_ != 0U &&
+        static_cast<int32_t>(transportYieldUntilMs_ - millis()) > 0) {
+      vTaskDelay(pdMS_TO_TICKS(25));
+      continue;
+    }
+    if (transportYieldUntilMs_ != 0U) transportYieldUntilMs_ = 0U;
 
     if (!enabled || !wifiReady) {
       if (socketStarted_) {

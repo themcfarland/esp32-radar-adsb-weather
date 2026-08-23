@@ -9,7 +9,7 @@ dev_h = (root / "src/device_config.h").read_text()
 config = (root / "include/config.h").read_text()
 version = (root / "include/version.h").read_text()
 
-assert "0.30.5-network-recovery" in version
+assert "0.30.8-tls-resource-guard-buildfix" in version
 assert 'xTaskCreatePinnedToCore(' in light_cpp and '"lightning-net"' in light_cpp
 # Main-task poll must not service the WebSocket directly.
 loop_start = light_cpp.index("bool LightningService::loop(bool enabled)")

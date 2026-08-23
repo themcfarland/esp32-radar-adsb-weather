@@ -78,6 +78,13 @@ constexpr float ADSB_FI_CENTER_LAT = 49.80f;
 constexpr float ADSB_FI_CENTER_LON = 15.35f;
 constexpr uint16_t ADSB_FI_RADIUS_NM = 180;
 constexpr uint32_t ADSB_FI_REFRESH_MS = 10UL * 1000UL;
+// Internet ADS-B is a realtime overlay. Do not let a temporary provider/TLS
+// failure hide remote aircraft for several minutes: retries are capped at 60 s
+// and an expired cache forces one recovery attempt at least every 30 s.
+constexpr uint32_t ADSB_FI_RECOVERY_RETRY_MS = 30UL * 1000UL;
+constexpr uint32_t ADSB_FI_BACKOFF_FIRST_MS = 15UL * 1000UL;
+constexpr uint32_t ADSB_FI_BACKOFF_SECOND_MS = 30UL * 1000UL;
+constexpr uint32_t ADSB_FI_BACKOFF_MAX_MS = 60UL * 1000UL;
 // Keep the last good aircraft snapshots long enough to survive one bounded
 // bulk HTTPS job in the serialized network worker. Source records themselves
 // are still accepted only when seen_pos <= AIRCRAFT_MAX_AGE_SEC.
@@ -98,6 +105,18 @@ constexpr uint32_t WIFI_RETRY_MS = 15UL * 1000UL;
 // connected, rebuild Wi-Fi and expose the configuration AP as a failsafe.
 constexpr uint32_t NETWORK_GLOBAL_STALE_MS = 3UL * 60UL * 1000UL;
 constexpr uint32_t NETWORK_RECOVERY_COOLDOWN_MS = 10UL * 60UL * 1000UL;
+
+// New outbound HTTPS/TLS handshakes require a contiguous block of internal
+// RAM even when several megabytes of PSRAM are free. When the internal heap is
+// too fragmented, defer bulk TLS work instead of repeatedly opening sockets
+// that will fail with HTTP -1 / mbedTLS connect errors. A short LightningMaps
+// transport yield can free its existing TLS context before the next attempt.
+constexpr uint32_t TLS_GUARD_MIN_FREE_INTERNAL = 48UL * 1024UL;
+constexpr uint32_t TLS_GUARD_MIN_LARGEST_BLOCK = 36UL * 1024UL;
+constexpr uint32_t TLS_GUARD_RETRY_MS = 5UL * 1000UL;
+constexpr uint8_t TLS_GUARD_FORCE_AFTER_DEFERS = 4;
+constexpr uint32_t TLS_GUARD_LIGHTNING_YIELD_MS = 20UL * 1000UL;
+constexpr uint32_t TLS_POST_REQUEST_SETTLE_MS = 20UL;
 
 // RGB LCD recovery guard. A blind periodic DMA restart was intentionally
 // removed in v0.20.1 because frequent restarts made horizontal movement worse.
