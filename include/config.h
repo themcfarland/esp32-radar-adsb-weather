@@ -106,15 +106,27 @@ constexpr uint32_t WIFI_RETRY_MS = 15UL * 1000UL;
 constexpr uint32_t NETWORK_GLOBAL_STALE_MS = 3UL * 60UL * 1000UL;
 constexpr uint32_t NETWORK_RECOVERY_COOLDOWN_MS = 10UL * 60UL * 1000UL;
 
-// New outbound HTTPS/TLS handshakes require a contiguous block of internal
-// RAM even when several megabytes of PSRAM are free. When the internal heap is
-// too fragmented, defer bulk TLS work instead of repeatedly opening sockets
-// that will fail with HTTP -1 / mbedTLS connect errors. A short LightningMaps
-// transport yield can free its existing TLS context before the next attempt.
-constexpr uint32_t TLS_GUARD_MIN_FREE_INTERNAL = 48UL * 1024UL;
-constexpr uint32_t TLS_GUARD_MIN_LARGEST_BLOCK = 36UL * 1024UL;
+// Adaptive TLS resource guard. Measurements from real hardware showed that
+// HTTPS still works reliably with a ~35 kB largest internal block, so the old
+// 36 kB pre-flight cut-off was too aggressive and repeatedly disconnected the
+// LightningMaps WSS even while adsb.fi returned HTTP 200.
+//
+// Normal/warning range: always try the TLS request. Only a truly critical
+// pre-flight state is deferred once. A wider failure window is used *after* a
+// real TLS/socket failure; only then is LightningMaps asked to release its
+// persistent TLS transport for one recovery attempt. Hysteresis prevents the
+// critical state from flapping around the threshold.
+constexpr uint32_t TLS_GUARD_CRITICAL_FREE_INTERNAL = 38UL * 1024UL;
+constexpr uint32_t TLS_GUARD_WARNING_LARGEST_BLOCK = 30UL * 1024UL;
+constexpr uint32_t TLS_GUARD_CRITICAL_LARGEST_BLOCK = 26UL * 1024UL;
+constexpr uint32_t TLS_GUARD_RECOVER_FREE_INTERNAL = 44UL * 1024UL;
+constexpr uint32_t TLS_GUARD_RECOVER_LARGEST_BLOCK = 32UL * 1024UL;
+// If a real TLS/socket request fails while memory is in this wider pressure
+// window, release LightningMaps once and retry soon. This catches the earlier
+// ~42 kB free / ~32 kB largest-block failure without penalising successful TLS.
+constexpr uint32_t TLS_RECOVERY_FAILURE_FREE_INTERNAL = 48UL * 1024UL;
+constexpr uint32_t TLS_RECOVERY_FAILURE_LARGEST_BLOCK = 36UL * 1024UL;
 constexpr uint32_t TLS_GUARD_RETRY_MS = 5UL * 1000UL;
-constexpr uint8_t TLS_GUARD_FORCE_AFTER_DEFERS = 4;
 constexpr uint32_t TLS_GUARD_LIGHTNING_YIELD_MS = 20UL * 1000UL;
 constexpr uint32_t TLS_POST_REQUEST_SETTLE_MS = 20UL;
 

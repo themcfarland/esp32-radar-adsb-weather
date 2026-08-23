@@ -154,6 +154,7 @@ struct RuntimeDiagnostics {
   bool networkWorkerPaused = false;
   uint8_t networkPendingJobs = 0;
   bool tlsGuardLowMemory = false;
+  uint8_t tlsMemoryState = 0;  // 0=OK, 1=warning, 2=critical
   uint32_t tlsFreeInternal = 0;
   uint32_t tlsLargestInternalBlock = 0;
   uint32_t tlsDeferredJobs = 0;

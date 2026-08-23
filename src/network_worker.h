@@ -33,6 +33,7 @@ class NetworkWorker {
     // available before the most recent outbound HTTPS job.
     bool taskAlive = false;
     bool tlsGuardLowMemory = false;
+    uint8_t tlsMemoryState = 0;  // 0=OK, 1=warning, 2=critical
     uint32_t tlsFreeInternal = 0;
     uint32_t tlsLargestInternalBlock = 0;
     uint32_t tlsDeferredJobs = 0;
@@ -110,6 +111,8 @@ class NetworkWorker {
                  uint32_t durationMs, const char* result);
   uint32_t failureBackoffMs(Job job, uint8_t failures) const;
   bool tlsPreflight(Job job, char* result, size_t resultSize, bool& deferred);
+  bool requestReactiveTlsRecovery(Job job, bool success);
+  void updateTlsMemoryStateLocked(uint32_t freeInternal, uint32_t largestInternal);
   static bool jobUsesTls(Job job);
   static uint8_t jobMask(Job job) {
     return static_cast<uint8_t>(1U << static_cast<uint8_t>(job));
@@ -143,6 +146,8 @@ class NetworkWorker {
   uint32_t nextAllowedMs_[kJobCount] = {};
   uint8_t failures_[kJobCount] = {};
   uint8_t tlsDefers_[kJobCount] = {};
+  bool tlsFailureRecoveryUsed_[kJobCount] = {};
+  bool tlsGuardLatched_ = false;
   bool tlsRecoveryRequested_ = false;
   Diagnostics diagnostics_;
 };

@@ -31,6 +31,12 @@ barometr a astronomie                forecast
 
 Worker provádí **jen jednu klasickou HTTP/HTTPS úlohu současně**. Tím se několik TLS klientů nepere o interní heap a Wi-Fi buffery. Po dokončení se hotová data zkopírují nebo krátce prohodí do aktivní cache v hlavní úloze.
 
+Od v0.30.9 je TLS ochrana adaptivní. Běžný nebo varovný stav paměti HTTPS
+neblokuje. LightningMaps WSS se při běžném paměťovém tlaku uvolní až po
+skutečné chybě TLS/socketu a pouze jednou do dalšího úspěchu. Pouze kritický
+pre-flight stav (38 kB free / 26 kB largest) může jednu úlohu předem odložit;
+návrat používá hysterézi 44/32 kB.
+
 ### Chování při výpadku služby
 
 Každý zdroj má vlastní stav a backoff. Při chybě se poslední platná data nemažou:

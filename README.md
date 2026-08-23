@@ -1,9 +1,19 @@
 # Waveshare 7" Radar ČR + ADS-B + počasí
 
-Firmware **0.30.8-tls-resource-guard-buildfix** je veřejná česká varianta projektu pro
+Firmware **0.30.9-adaptive-tls-guard** je veřejná česká varianta projektu pro
 **Waveshare ESP32-S3-Touch-LCD-7 (800×480, ST7262, GT911, 8 MB OPI PSRAM)**.
 Po stažení z GitHubu neobsahuje osobní Wi-Fi, Weather Underground stanici ani
 lokální IP adresu ADS-B přijímače.
+
+### 0.30.9 - adaptivní TLS guard
+
+TLS ochrana už preventivně neodpojuje LightningMaps při běžném bloku kolem 35 kB.
+Normální a varovný stav vždy zkusí HTTPS; kritický stav má hysterézi a pouze jedno
+odložení. LightningMaps se při běžném tlaku na paměť uvolní až po skutečné chybě
+TLS/socketu a jen jednou do dalšího úspěšného spojení. Diagnostika rozlišuje
+`OK / VAROVANI / KRITICKA RAM` a pre-flight defer nepřepisuje poslední skutečný
+výsledek adsb.fi.
+
 
 ## Nová síťová architektura v0.30.0
 

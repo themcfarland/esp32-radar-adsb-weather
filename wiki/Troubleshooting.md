@@ -77,9 +77,19 @@ V Diagnostice zkontrolujte blok ADS-B internet. Zobrazuje posledni zdroj, HTTP k
 
 ## Internetové HTTPS zdroje přestanou fungovat, lokální ADS-B běží
 
-Od v0.30.7 sledujte v Diagnostice položku **TLS guard**. Pokud je interní heap
-nebo největší souvislý blok nízký, firmware externí HTTPS request dočasně
-odloží a může krátce uvolnit LightningMaps WSS transport. Typický stav je
-`TLS guard: NIZKA / FRAGMENTOVANA RAM`; po uvolnění paměti se další pokus
-provede automaticky. adsb.lol se po transportní chybě adsb.fi nespouští
-okamžitě, aby nevznikl druhý náročný TLS handshake.
+Od v0.30.9 sledujte v Diagnostice položku **TLS guard** se stavy `OK`,
+`VAROVANI` a `KRITICKA RAM`. Největší interní blok přibližně 30-36 kB už není
+důvodem k preventivnímu odpojení LightningMaps: HTTPS se normálně zkusí.
+Pokud skutečný TLS/socket request selže při paměťovém tlaku (méně než 48 kB
+volné interní RAM nebo největší blok pod 36 kB), firmware jednou uvolní
+LightningMaps WSS na 20 s a provede rychlejší další pokus. Tento recovery se
+opakuje až po dalším úspěšném spojení, takže WSS není cyklicky odpojován.
+
+Kritický pre-flight stav začíná pod 38 kB volné interní RAM nebo pod 26 kB
+největšího bloku. V tomto stavu se jedna HTTPS úloha krátce odloží a WSS se
+uvolní jako bezpečnostní opatření. Návrat z kritického stavu používá hysterézi
+(44 kB free a 32 kB largest), aby stav nekmital kolem hranice. Skutečné HTTP
+chyby 4xx/5xx u adsb.fi WSS recovery nespouštějí.
+
+adsb.lol se po DNS/TLS/socket chybě adsb.fi nespouští okamžitě, aby nevznikl
+druhý náročný TLS handshake.

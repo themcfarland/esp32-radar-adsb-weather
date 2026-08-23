@@ -9,7 +9,7 @@ config = (ROOT / "include" / "config.h").read_text()
 main = (ROOT / "src" / "main.cpp").read_text()
 version = (ROOT / "include" / "version.h").read_text()
 
-assert "0.30.8-tls-resource-guard-buildfix" in version
+assert "0.30.9-adaptive-tls-guard" in version
 assert "AircraftSnapshot* localCache_" in adsb_h
 assert "AircraftSnapshot* adsbFiCache_" in adsb_h
 assert "MALLOC_CAP_SPIRAM" in adsb

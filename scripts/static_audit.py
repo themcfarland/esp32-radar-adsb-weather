@@ -42,8 +42,8 @@ ui_cpp = read("src/ui.cpp")
 patch = read("scripts/patch_display_driver.py")
 readme = read("README.md")
 
-require("0.30.8-tls-resource-guard-buildfix" in version,
-        "firmware version is not v0.30.8-tls-resource-guard-buildfix")
+require("0.30.9-adaptive-tls-guard" in version,
+        "firmware version is not v0.30.9-adaptive-tls-guard")
 require("DEFAULT_HOME_LAT" in config and "DEFAULT_HOME_LON" in config and
         "home_lat" in device_cpp and "home_lon" in device_cpp and
         "settings_.homeLat" in device_cpp and "settings_.homeLon" in device_cpp,
@@ -93,16 +93,19 @@ require("xTaskCreatePinnedToCore" in network_worker_cpp and
         "weather.updateCurrent();" not in main.split("void loop()",1)[1] and
         "radar.updateFrames();" not in main.split("void loop()",1)[1],
         "runtime network operations are not isolated in the background worker")
-require("TLS_GUARD_MIN_FREE_INTERNAL" in config and
-        "TLS_GUARD_MIN_LARGEST_BLOCK" in config and
+require("TLS_GUARD_CRITICAL_FREE_INTERNAL" in config and
+        "TLS_GUARD_CRITICAL_LARGEST_BLOCK" in config and
+        "TLS_GUARD_RECOVER_LARGEST_BLOCK" in config and
+        "TLS_RECOVERY_FAILURE_LARGEST_BLOCK" in config and
         "tlsPreflight" in network_worker_cpp and
+        "requestReactiveTlsRecovery" in network_worker_cpp and
         "consumeTlsRecoveryRequest" in network_worker_cpp and
         "requestTransportYield" in lightning_cpp and
         "fallback suppressed code=%d" in adsb_cpp and
         "lastNetworkHttpCode_ = code" in adsb_cpp and
         "releaseSecureHttp" in adsb_cpp and
-        "tls_guard_low_memory" in device_cpp,
-        "TLS resource guard / transport-yield hardening is missing")
+        "tls_memory_state" in device_cpp,
+        "adaptive TLS resource guard / reactive transport-yield hardening is missing")
 require("serviceNetwork" in device_h and "WiFi async: starting reconnect cycle" in device_cpp and
         "deviceConfig.serviceNetwork()" in main and "ensureNetwork(4000)" not in main,
         "runtime Wi-Fi reconnect is still blocking")

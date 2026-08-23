@@ -543,6 +543,7 @@ void updateRuntimeDiagnostics() {
   runtimeDiagnostics.networkWorkerPaused = networkDiag.paused;
   runtimeDiagnostics.networkPendingJobs = networkDiag.pendingJobs;
   runtimeDiagnostics.tlsGuardLowMemory = networkDiag.tlsGuardLowMemory;
+  runtimeDiagnostics.tlsMemoryState = networkDiag.tlsMemoryState;
   runtimeDiagnostics.tlsFreeInternal = networkDiag.tlsFreeInternal;
   runtimeDiagnostics.tlsLargestInternalBlock = networkDiag.tlsLargestInternalBlock;
   runtimeDiagnostics.tlsDeferredJobs = networkDiag.tlsDeferredJobs;
@@ -986,10 +987,10 @@ void loop() {
     return;
   }
 
-  // If the bulk TLS guard sees fragmented/low internal RAM, briefly drop the
-  // persistent LightningMaps WSS transport. Its strike history stays in PSRAM;
-  // the WSS reconnects automatically after the hold interval. This can free
-  // enough mbedTLS/socket memory for the next adsb.fi/CHMI/weather handshake.
+  // The adaptive TLS guard requests a LightningMaps transport yield only for a
+  // truly critical pre-flight state or after a real failed TLS/socket request
+  // under memory pressure. Successful HTTPS at ~35 kB largest block no longer
+  // tears down the realtime WSS transport.
   if (networkWorker.consumeTlsRecoveryRequest()) {
     lightning.requestTransportYield(Config::TLS_GUARD_LIGHTNING_YIELD_MS);
   }

@@ -1,3 +1,13 @@
+# 0.30.9-adaptive-tls-guard
+
+- TLS guard je adaptivní: normální a varovný stav již neodkládá funkční HTTPS.
+- Kritická hranice je 38 kB volné interní RAM nebo 26 kB největší blok; návrat z kritického stavu používá hysterézi 44/32 kB.
+- Skutečná TLS/socket chyba při paměťovém tlaku (<48 kB free nebo <36 kB largest) vyvolá jediný 20s LightningMaps WSS yield a rychlý retry.
+- HTTP 4xx/5xx nespouští WSS recovery.
+- Úspěšné adsb.fi při ~35 kB largest block již LightningMaps preventivně neodpojuje.
+- TLS pre-flight defer již nepřepisuje poslední skutečný výsledek adsb.fi/adsb.lol v diagnostice.
+- Diagnostika rozlišuje stav TLS paměti OK / varování / kritický.
+
 # 0.30.8-tls-resource-guard-buildfix
 
 - Oprava kompilace `NetworkWorker::finishJob()`: formátovací řetězec `DebugLog::printf()` pro TLS DEFER měl omylem vložený fyzický konec řádku.

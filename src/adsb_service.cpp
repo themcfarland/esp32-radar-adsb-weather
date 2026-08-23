@@ -575,7 +575,7 @@ bool AdsbService::fetchNetworkProvider(AircraftSnapshot& target,
     return false;
   }
 
-  http.addHeader("User-Agent", "ESP32-Radar-ADSB/0.30.8");
+  http.addHeader("User-Agent", "ESP32-Radar-ADSB/0.30.9");
   http.addHeader("Accept", "application/json");
   http.addHeader("Accept-Encoding", "identity");
   http.addHeader("Connection", "close");

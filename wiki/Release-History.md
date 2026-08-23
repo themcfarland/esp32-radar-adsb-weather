@@ -1,3 +1,11 @@
+## 0.30.9 - Adaptive TLS guard
+
+- preventivní WSS yield odstraněn z běžného/varovného rozsahu paměti,
+- kritická hranice 38 kB free / 26 kB largest s hysterézí 44/32 kB,
+- LightningMaps yield se při běžném paměťovém tlaku spustí až po skutečné TLS/socket chybě a pouze jednou do dalšího úspěchu,
+- adsb.fi HTTP 4xx/5xx WSS recovery nespouští,
+- diagnostika rozlišuje OK / VAROVANI / KRITICKA RAM.
+
 ## 0.30.8 - TLS resource guard buildfix
 
 - Oprava build chyby v logovacím volání NetworkWorkeru.
