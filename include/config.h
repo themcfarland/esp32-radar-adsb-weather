@@ -78,10 +78,13 @@ constexpr float ADSB_FI_CENTER_LAT = 49.80f;
 constexpr float ADSB_FI_CENTER_LON = 15.35f;
 constexpr uint16_t ADSB_FI_RADIUS_NM = 180;
 constexpr uint32_t ADSB_FI_REFRESH_MS = 10UL * 1000UL;
-constexpr uint32_t ADSB_LOCAL_CACHE_MAX_AGE_MS = 10UL * 1000UL;
+// Keep the last good aircraft snapshots long enough to survive one bounded
+// bulk HTTPS job in the serialized network worker. Source records themselves
+// are still accepted only when seen_pos <= AIRCRAFT_MAX_AGE_SEC.
+constexpr uint32_t ADSB_LOCAL_CACHE_MAX_AGE_MS = 60UL * 1000UL;
 constexpr uint8_t ADSB_LOCAL_BACKOFF_AFTER_FAILURES = 3;
 constexpr uint32_t ADSB_LOCAL_FAILURE_BACKOFF_MS = 30UL * 1000UL;
-constexpr uint32_t ADSB_FI_CACHE_MAX_AGE_MS = 30UL * 1000UL;
+constexpr uint32_t ADSB_FI_CACHE_MAX_AGE_MS = 120UL * 1000UL;
 constexpr uint32_t RADAR_REFRESH_MS = 5UL * 60UL * 1000UL;
 constexpr uint32_t RADAR_ANIMATION_MS = 1400;
 // Personal-station observations refresh every 5 min; the 48 h hourly forecast hourly.

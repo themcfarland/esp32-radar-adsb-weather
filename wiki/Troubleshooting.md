@@ -60,3 +60,8 @@ Od 0.30.0 se HTTP/TLS zdroje zpracovávají po jednom na pozadí. Poslední dobr
 ## Obraz se při zátěži posune
 
 Od verze **0.30.0** jsou dlouhé runtime HTTP/TLS operace přesunuty mimo hlavní smyčku do `NetworkWorker`, takže výpadek adsb.fi, ČHMÚ, Open-Meteo/WU nebo lokálního ADS-B nemá čekáním blokovat LVGL/mapu. Stále zůstává load guard z 0.29.4 a navíc síťový guard po mimořádně dlouhé nebo chybové síťové úloze. Oba mechanismy mohou naplánovat jednorázové srovnání RGB DMA, nejvýše jednou za ochranný interval; nejde o periodický restart panelu. Pokud by obraz zůstal posunutý, ruční **Srovnat LCD** je stále na webu. V diagnostice zkontrolujte také kartu **Síťový worker** a položku nejdelší úlohy.
+
+
+## Radar hlásí „index nedostupný, cache běží“ a letadla
+
+Tato hláška patří pouze radaru ČHMÚ. Od 0.30.4 nesmí krátký výpadek radarového indexu vyprázdnit ADS-B vrstvu: worker upřednostní local/adsb.fi a poslední platná aircraft cache zůstane dočasně zobrazena. Pokud letadla přesto zmizí, zkontrolujte v Diagnostice `ADSB`, `Síťový worker / Aktivní úloha` a `Poslední úloha`.

@@ -213,7 +213,9 @@ bool NetworkWorker::selectNextJob(Job& job) {
   // The remaining jobs are intentionally serialized so several TLS clients
   // never compete for internal heap / Wi-Fi buffers at the same time.
   static constexpr Job priority[] = {
-      Job::AdsbLocal, Job::WeatherCurrent, Job::AdsbInternet,
+      // Keep aircraft feeds ahead of all bulk weather/radar work. A slow CHMI
+      // index must never be selected while an ADS-B refresh is already queued.
+      Job::AdsbLocal, Job::AdsbInternet, Job::WeatherCurrent,
       Job::Radar, Job::Forecast};
   const uint32_t now = millis();
   for (Job candidate : priority) {

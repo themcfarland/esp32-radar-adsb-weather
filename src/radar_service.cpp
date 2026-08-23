@@ -174,8 +174,8 @@ bool RadarService::scanLatestFiles(
 
   HTTPClient http;
   http.useHTTP10(true);
-  http.setConnectTimeout(7000);
-  http.setTimeout(20000);
+  http.setConnectTimeout(6000);
+  http.setTimeout(12000);
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   if (!http.begin(client, Config::RADAR_INDEX_URL)) {
     snprintf(status_, sizeof(status_), "Radar: nelze otevrit index");
@@ -188,20 +188,29 @@ bool RadarService::scanLatestFiles(
   if (code != HTTP_CODE_OK) {
     snprintf(status_, sizeof(status_), "Radar index HTTP %d", code);
     http.end();
+    client.stop();
     return false;
   }
 
   WiFiClient* stream = http.getStreamPtr();
   const uint32_t started = millis();
+  uint32_t lastData = started;
+  // The radar index is only discovery metadata. If CHMI is slow, keep the
+  // already working animation cache instead of occupying the serialized
+  // network worker for tens of seconds and starving ADS-B refreshes.
+  constexpr uint32_t kIndexTotalTimeoutMs = 15000UL;
+  constexpr uint32_t kIndexNoDataTimeoutMs = 5000UL;
   while ((http.connected() || stream->available()) &&
-         millis() - started < 45000UL) {
+         millis() - started < kIndexTotalTimeoutMs) {
     if (!stream->available()) {
       if (!http.connected()) break;
+      if (millis() - lastData > kIndexNoDataTimeoutMs) break;
       delay(2);
       continue;
     }
 
     const String line = stream->readStringUntil('\n');
+    lastData = millis();
     int searchFrom = 0;
     while (true) {
       const int start = line.indexOf(kRadarPrefix, searchFrom);
@@ -232,6 +241,7 @@ bool RadarService::scanLatestFiles(
   }
 
   http.end();
+  client.stop();
   if (count == 0) {
     snprintf(status_, sizeof(status_), "Radar: prazdny index");
     return false;

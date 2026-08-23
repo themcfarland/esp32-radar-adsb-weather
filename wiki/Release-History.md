@@ -1,3 +1,10 @@
+## 0.30.4-adsb-resilience
+
+- ADS-B má prioritu před radar/weather joby.
+- Delší retention poslední dobré local/adsb.fi cache.
+- Radar index má kratší timeout, při výpadku běží poslední cache.
+- Pomalé selhání adsb.fi už nespouští okamžitě druhý velký TLS download přes adsb.lol.
+
 ## 0.30.3-home-map-buttons
 
 - tlacitka Cela CR / 50 / 25 / 10 km ve webu

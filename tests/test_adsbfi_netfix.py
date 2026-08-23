@@ -9,7 +9,7 @@ config = (ROOT / "include" / "config.h").read_text()
 main = (ROOT / "src" / "main.cpp").read_text()
 version = (ROOT / "include" / "version.h").read_text()
 
-assert "0.30.3-home-map-buttons" in version
+assert "0.30.4-adsb-resilience" in version
 assert "AircraftSnapshot* localCache_" in adsb_h
 assert "AircraftSnapshot* adsbFiCache_" in adsb_h
 assert "MALLOC_CAP_SPIRAM" in adsb

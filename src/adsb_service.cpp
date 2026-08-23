@@ -654,13 +654,24 @@ bool AdsbService::fetchAdsbFi(AircraftSnapshot& target) {
            Config::ADSB_FI_CENTER_LON,
            static_cast<unsigned>(Config::ADSB_FI_RADIUS_NM));
 
+  const uint32_t primaryStarted = millis();
   if (fetchNetworkProvider(target, "adsb.fi", "opendata.adsb.fi", primaryUrl)) {
     return true;
   }
 
-  // adsb.lol exposes the same readsb/ADSBExchange-compatible aircraft fields.
-  // It is used only as a fallback when adsb.fi cannot establish/parse a
-  // request, so the normal source remains adsb.fi and request load stays low.
+  const uint32_t primaryDuration = millis() - primaryStarted;
+  // A second large TLS transfer immediately after a slow/partial adsb.fi
+  // request can keep the single bulk network worker busy long enough for both
+  // aircraft caches to age out. Use adsb.lol only for fast failures (DNS,
+  // immediate HTTP error, etc.); after a slow failure let the worker backoff
+  // and return to latency-sensitive jobs first.
+  if (primaryDuration >= 10000UL) {
+    DebugLog::printf(
+        "adsb.fi: slow failure %u ms; adsb.lol fallback deferred\n",
+        static_cast<unsigned>(primaryDuration));
+    return false;
+  }
+
   resetSnapshot(target);
   delay(25);
   char fallbackUrl[192];

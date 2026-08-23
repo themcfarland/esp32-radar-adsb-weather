@@ -1,6 +1,6 @@
 # Waveshare 7" Radar ČR + ADS-B + počasí
 
-Firmware **0.30.3-home-map-buttons** je veřejná česká varianta projektu pro
+Firmware **0.30.4-adsb-resilience** je veřejná česká varianta projektu pro
 **Waveshare ESP32-S3-Touch-LCD-7 (800×480, ST7262, GT911, 8 MB OPI PSRAM)**.
 Po stažení z GitHubu neobsahuje osobní Wi-Fi, Weather Underground stanici ani
 lokální IP adresu ADS-B přijímače.
@@ -167,3 +167,7 @@ Hlavni LCD obrazovka uz nezobrazuje tlacitka **PAUZA** a **OBNOVIT**. Radarova a
 ### Okamzite prepinani mapy z webu
 
 V sekci HOME jsou ctyri tlacitka `Cela CR / 50 km / 25 km / 10 km`. Stisk tlacitka okamzite vycentruje LCD mapu na ulozenou polohu HOME a ulozi mapovy rezim do NVS; neni nutne odesilat cely formular.
+
+### Odolnost ADS-B při výpadku jiného serveru
+
+Síťové operace jsou serializované. Verze 0.30.4 proto chrání ADS-B před pomalým ČHMÚ/HTTPS jobem: lokální a internetový ADS-B mají nejvyšší prioritu, radarový index má krátký hard limit a poslední dobré aircraft snapshoty se po krátkou dobu zachovají. Stav `Radar: index nedostupny, cache bezi` tedy znamená pouze problém s aktualizací radarového indexu; nemá vymazat letadla.

@@ -1,3 +1,11 @@
+## 0.30.4-adsb-resilience
+
+- Oprava situace, kdy při pomalém/nedostupném indexu ČHMÚ mohl serializovaný síťový worker držet ADS-B joby tak dlouho, že lokální i internetová cache letadel zestárla a mapa zůstala bez letadel.
+- ADS-B local a adsb.fi mají nyní v síťové frontě nejvyšší prioritu před počasím a radarem.
+- Poslední dobrá lokální ADS-B cache se drží 60 s a internetová 120 s, aby krátký výpadek jiného serveru nezpůsobil prázdnou mapu.
+- Čtení indexu ČHMÚ je omezeno na 15 s celkem / 5 s bez dat; při problému zůstává aktivní poslední radarová cache.
+- adsb.lol fallback se po pomalém selhání adsb.fi nespouští okamžitě; worker se nejprve vrátí k ostatním úlohám a použije backoff.
+
 ## 0.30.3-home-map-buttons
 
 - Webove nastaveni rozsahu mapy kolem HOME je nyni reseno ctyrmi tlacitky: Cela CR / 50 km / 25 km / 10 km.
