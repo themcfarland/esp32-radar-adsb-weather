@@ -1,3 +1,11 @@
+## 0.30.5-network-recovery
+
+- LightningMaps WebSocket byl přesunut z hlavního Arduino loopu do samostatného FreeRTOS tasku na core 0; DNS/TCP/TLS reconnect už nemůže zablokovat webové rozhraní ani UI.
+- Reconnect LightningMaps se odkládá, pokud právě běží velká HTTP/TLS úloha NetworkWorkeru, aby se omezila souběžná zátěž Wi-Fi a interního heapu.
+- Přidán globální network-health watchdog: pokud jsou současně stale internetový ADS-B, LightningMaps a případně povolený lokální ADS-B, provede se jednorázový reset Wi-Fi rozhraní.
+- Při globálním síťovém selhání se okamžitě spustí recovery AP `Radar-ADSB-Setup-XXXX` a znovu se aktivuje web listener; uložené Wi-Fi profily se následně zkoušejí neblokujícím reconnectem.
+- Recovery má 10min cooldown, takže výpadek jednoho poskytovatele nebo krátký internetový problém nespouští opakované resetování Wi-Fi.
+
 ## 0.30.4-adsb-resilience
 
 - Oprava situace, kdy při pomalém/nedostupném indexu ČHMÚ mohl serializovaný síťový worker držet ADS-B joby tak dlouho, že lokální i internetová cache letadel zestárla a mapa zůstala bez letadel.

@@ -65,3 +65,7 @@ Od verze **0.30.0** jsou dlouhé runtime HTTP/TLS operace přesunuty mimo hlavn�
 ## Radar hlásí „index nedostupný, cache běží“ a letadla
 
 Tato hláška patří pouze radaru ČHMÚ. Od 0.30.4 nesmí krátký výpadek radarového indexu vyprázdnit ADS-B vrstvu: worker upřednostní local/adsb.fi a poslední platná aircraft cache zůstane dočasně zobrazena. Pokud letadla přesto zmizí, zkontrolujte v Diagnostice `ADSB`, `Síťový worker / Aktivní úloha` a `Poslední úloha`.
+
+## Web nejde otevřít a několik datových zdrojů současně stojí
+
+Od v0.30.5 je LightningMaps WSS mimo hlavní UI loop. Pokud navíc firmware zjistí současný výpadek několika nezávislých zdrojů při stále hlášeném `WL_CONNECTED`, provede Wi-Fi recovery a zpřístupní AP `Radar-ADSB-Setup-XXXX` (`192.168.4.1`, heslo `radarsetup`). Tento mechanismus je záměrně konzervativní a má 10min cooldown.

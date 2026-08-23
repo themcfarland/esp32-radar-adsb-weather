@@ -69,6 +69,9 @@ class DeviceConfigService {
   // it tries the enabled profiles without delay()/wait loops and starts the
   // configuration AP when a full cycle fails.
   void serviceNetwork();
+  // Rebuild the Wi-Fi interface and expose the configuration AP even when
+  // WL_CONNECTED is stuck but sockets/DNS/TLS are no longer usable.
+  void forceNetworkRecovery(const char* reason);
 
   bool stationConnected() const;
   bool portalActive() const { return portalActive_; }

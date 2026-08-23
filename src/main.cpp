@@ -62,6 +62,7 @@ bool mapViewSavePending = false;
 bool mapPreferencesReady = false;
 bool displayResyncPending = false;
 bool lastNetworkConnected = false;
+uint32_t lastGlobalNetworkRecovery = 0;
 uint32_t lastMapViewChange = 0;
 uint32_t lcdResyncCount = 0;
 uint32_t lcdLoadGuardTriggerCount = 0;
@@ -264,6 +265,14 @@ bool validateDisplay() {
 
 bool due(uint32_t now, uint32_t previous, uint32_t interval) {
   return static_cast<int32_t>(now - previous) >= static_cast<int32_t>(interval);
+}
+
+bool networkActivityStale(uint32_t now, uint32_t lastSuccess,
+                          uint32_t staleMs) {
+  // Allow the system one full stale window after boot before treating a source
+  // that has never succeeded as evidence of a wedged network stack.
+  if (now < staleMs) return false;
+  return lastSuccess == 0U || due(now, lastSuccess, staleMs);
 }
 
 void scheduleDisplayRecoveryAfterLoad(uint32_t loopDurationMs) {
@@ -949,8 +958,9 @@ void loop() {
     return;
   }
 
-  // Keep the realtime LightningMaps WSS client serviced continuously. A new
-  // strike requests a redraw even while the radar animation is paused.
+  // LightningMaps has its own background network task. Only pass the current
+  // enable/bulk-network state here; no WSS/DNS/TLS code runs in the UI loop.
+  lightning.setBulkNetworkBusy(networkWorker.diagnostics().running);
   if (lightning.loop(lightningLayerEnabled && deviceConfig.stationConnected())) {
     mapDirty = true;
   }
@@ -1107,6 +1117,38 @@ void loop() {
   // statistics to detect exceptional TLS/PSRAM load that may still disturb the
   // RGB DMA. Recovery remains cooldown-limited, never periodic.
   scheduleDisplayRecoveryAfterNetwork(networkWorker.diagnostics());
+
+  // Last-resort Wi-Fi/network-stack recovery. WL_CONNECTED can remain true
+  // even when DNS/TCP/TLS sockets are wedged. Require several independent
+  // feeds to be stale before rebuilding Wi-Fi, so a single provider outage
+  // never triggers this path. The configuration AP is exposed immediately.
+  if (networkConnected && adsbLayerEnabled && lightningLayerEnabled) {
+    const DeviceSettings& settings = deviceConfig.settings();
+    const bool internetAdsbStale = networkActivityStale(
+        now, adsb.lastNetworkSuccessMs(), Config::NETWORK_GLOBAL_STALE_MS);
+    const bool lightningStale = networkActivityStale(
+        now, lightning.lastSuccessMs(), Config::NETWORK_GLOBAL_STALE_MS);
+    const bool localAdsbStale =
+        !settings.localAdsbEnabled || settings.adsbUrl.isEmpty() ||
+        networkActivityStale(now, adsb.lastLocalSuccessMs(),
+                             Config::NETWORK_GLOBAL_STALE_MS);
+    const bool recoveryAllowed =
+        lastGlobalNetworkRecovery == 0U ||
+        due(now, lastGlobalNetworkRecovery,
+            Config::NETWORK_RECOVERY_COOLDOWN_MS);
+
+    if (internetAdsbStale && lightningStale && localAdsbStale &&
+        recoveryAllowed) {
+      DebugLog::println(
+          "Network health watchdog: ADS-B + LightningMaps stale -> Wi-Fi rebuild + recovery AP");
+      lastGlobalNetworkRecovery = now;
+      networkWorker.setPaused(true);
+      deviceConfig.forceNetworkRecovery("network feeds stale - recovery AP");
+      lastNetworkConnected = false;
+      delay(1);
+      return;
+    }
+  }
 
   int16_t mapTapX = 0;
   int16_t mapTapY = 0;

@@ -1,6 +1,6 @@
 # Waveshare 7" Radar ČR + ADS-B + počasí
 
-Firmware **0.30.4-adsb-resilience** je veřejná česká varianta projektu pro
+Firmware **0.30.5-network-recovery** je veřejná česká varianta projektu pro
 **Waveshare ESP32-S3-Touch-LCD-7 (800×480, ST7262, GT911, 8 MB OPI PSRAM)**.
 Po stažení z GitHubu neobsahuje osobní Wi-Fi, Weather Underground stanici ani
 lokální IP adresu ADS-B přijímače.
@@ -20,7 +20,7 @@ seriově zpracovává:
 V jednu chvíli se provádí pouze **jedna klasická HTTP/HTTPS úloha**. Hotová
 data se předají hlavnímu vláknu až po dokončení přenosu a parsování. LVGL,
 animace mapy, dotyk a hodiny proto pokračují i při timeoutu vzdáleného serveru.
-LightningMaps zůstává jako lehký realtime WebSocket obsluhovaný průběžně.
+LightningMaps má od v0.30.5 vlastní nízkoprioritní FreeRTOS task na core 0. WSS reconnect a případné DNS/TLS čekání proto už neběží v hlavním UI loopu a nemůže zastavit webové rozhraní nebo překreslování displeje.
 
 Při chybě služby se zachovají poslední platná data a pro další pokusy se použije
 postupný backoff. Runtime reconnect Wi-Fi je nově **neblokující stavový automat**:
@@ -31,6 +31,11 @@ Webová diagnostika navíc ukazuje aktivní síťovou úlohu, počet čekající
 čas poslední a nejdelší úlohy, počet chyb a backoffů. Pokud je background
 operace mimořádně dlouhá nebo selže, může se po dokončení naplánovat jeden
 RGB DMA resync; platí stejný minimální 90s cooldown jako u display load guardu.
+
+
+## Recovery při globálním síťovém výpadku
+
+Pokud `WL_CONNECTED` zůstane viset, ale několik nezávislých datových zdrojů současně přestane přijímat data, firmware po 3 minutách vyhodnotí stav jako poruchu síťového stacku. NetworkWorker se pozastaví, Wi-Fi rozhraní se krátce znovu inicializuje a současně se spustí konfigurační AP `Radar-ADSB-Setup-XXXX` na `192.168.4.1`. Web listener se znovu aktivuje a uložené Wi-Fi profily se zkoušejí neblokujícím stavovým automatem. Další automatický zásah je povolen nejdříve za 10 minut.
 
 ## První spuštění
 

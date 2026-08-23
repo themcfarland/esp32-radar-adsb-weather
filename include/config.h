@@ -94,6 +94,10 @@ constexpr uint32_t ASTRONOMY_REFRESH_MS = 60UL * 1000UL;
 constexpr uint32_t BAROMETER_REFRESH_MS = 60UL * 1000UL;
 constexpr uint32_t PRESSURE_HISTORY_STEP_MS = 5UL * 60UL * 1000UL;
 constexpr uint32_t WIFI_RETRY_MS = 15UL * 1000UL;
+// If several independent network feeds are stale while STA still reports
+// connected, rebuild Wi-Fi and expose the configuration AP as a failsafe.
+constexpr uint32_t NETWORK_GLOBAL_STALE_MS = 3UL * 60UL * 1000UL;
+constexpr uint32_t NETWORK_RECOVERY_COOLDOWN_MS = 10UL * 60UL * 1000UL;
 
 // RGB LCD recovery guard. A blind periodic DMA restart was intentionally
 // removed in v0.20.1 because frequent restarts made horizontal movement worse.

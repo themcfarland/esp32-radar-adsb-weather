@@ -44,17 +44,24 @@ float greatCircleDistanceKm(float lat1Deg, float lon1Deg, float lat2Deg,
 LightningService::LightningService() = default;
 
 LightningService::~LightningService() {
+  enabledRequested_ = false;
+  if (task_) {
+    vTaskDelete(task_);
+    task_ = nullptr;
+  }
   webSocket_.disconnect();
   if (strikes_) heap_caps_free(strikes_);
   delete jsonDoc_;
+  if (strikeMutex_) vSemaphoreDelete(strikeMutex_);
 }
 
 bool LightningService::begin() {
   strikes_ = static_cast<Strike*>(heap_caps_calloc(
       kMaxStrikes, sizeof(Strike), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
   jsonDoc_ = new BasicJsonDocument<PsramAllocator>(kJsonCapacity);
+  strikeMutex_ = xSemaphoreCreateMutex();
 
-  if (!strikes_ || !jsonDoc_) {
+  if (!strikes_ || !jsonDoc_ || !strikeMutex_) {
     snprintf(status_, sizeof(status_), "Blesky: malo RAM/PSRAM pro LightningMaps");
     return false;
   }
@@ -64,8 +71,92 @@ bool LightningService::begin() {
   });
   webSocket_.setReconnectInterval(60000);  // service handles reconnect itself
   webSocket_.enableHeartbeat(15000, 3000, 2);
+
+  const BaseType_t created = xTaskCreatePinnedToCore(
+      taskEntry, "lightning-net", 10240, this, 1, &task_, 0);
+  if (created != pdPASS) {
+    task_ = nullptr;
+    snprintf(status_, sizeof(status_), "Blesky: nelze spustit network task");
+    return false;
+  }
+
   snprintf(status_, sizeof(status_), "Blesky: LightningMaps JSON pripraven");
+  Serial.printf("Lightning: background network task started on core 0, stack=10240 B\n");
   return true;
+}
+
+bool LightningService::loop(bool enabled) {
+  // Network work never runs in the Arduino/UI task. This is deliberately only
+  // a cheap control/poll operation so a broken WSS/DNS/TLS path cannot stop
+  // WebServer::handleClient(), LVGL or RGB DMA servicing.
+  enabledRequested_ = enabled;
+
+  bool changed = dataChanged_;
+  dataChanged_ = false;
+
+  if (strikeCount_ > 0 &&
+      millis() - lastAgeRedrawMs_ >= Config::LIGHTNING_REDRAW_MS) {
+    lastAgeRedrawMs_ = millis();
+    changed = true;
+  }
+  return changed;
+}
+
+void LightningService::taskEntry(void* context) {
+  static_cast<LightningService*>(context)->taskLoop();
+}
+
+void LightningService::taskLoop() {
+  uint32_t lastPruneMs = 0;
+  for (;;) {
+    const bool enabled = enabledRequested_;
+    const bool wifiReady = WiFi.status() == WL_CONNECTED;
+
+    if (!enabled || !wifiReady) {
+      if (socketStarted_) {
+        webSocket_.disconnect();
+        socketStarted_ = false;
+        connected_ = false;
+      }
+      snprintf(status_, sizeof(status_), enabled ? "Blesky: WiFi offline"
+                                                 : "Blesky: vrstva vypnuta");
+      vTaskDelay(pdMS_TO_TICKS(50));
+      continue;
+    }
+
+    const uint32_t nowMs = millis();
+    if (!socketStarted_ && static_cast<int32_t>(nowMs - reconnectAtMs_) >= 0 &&
+        !bulkNetworkBusy_) {
+      connectServer();
+    }
+
+    // This call may occasionally spend time in DNS/TCP/TLS reconnect logic.
+    // It is intentionally isolated on core 0 so the UI/web task keeps running.
+    if (socketStarted_) webSocket_.loop();
+
+    if (connected_ && socketStarted_) {
+      const uint32_t healthNow = millis();
+      if (lastValidFrameMs_ == 0U) {
+        if (connectedAtMs_ != 0U &&
+            healthNow - connectedAtMs_ >= Config::LIGHTNING_FIRST_DATA_TIMEOUT_MS) {
+          forceReconnect("no first JSON frame");
+        }
+      } else if (healthNow - lastValidFrameMs_ >=
+                 Config::LIGHTNING_STALE_DATA_TIMEOUT_MS) {
+        forceReconnect("no valid JSON data");
+      }
+    }
+
+    if (millis() - lastPruneMs >= 5000UL) {
+      lastPruneMs = millis();
+      const time_t now = time(nullptr);
+      if (now > 1700000000) {
+        pruneOldStrikes(static_cast<uint32_t>(now));
+      }
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(8));
+  }
 }
 
 String LightningService::buildSubscription() const {
@@ -110,54 +201,6 @@ void LightningService::forceReconnect(const char* reason) {
   ++watchdogReconnects_;
   snprintf(status_, sizeof(status_), "Blesky: JSON watchdog reconnect (%u)",
            static_cast<unsigned>(watchdogReconnects_));
-}
-
-bool LightningService::loop(bool enabled) {
-  dataChanged_ = false;
-
-  if (!enabled || WiFi.status() != WL_CONNECTED) {
-    if (socketStarted_) {
-      webSocket_.disconnect();
-      socketStarted_ = false;
-      connected_ = false;
-    }
-    snprintf(status_, sizeof(status_), enabled ? "Blesky: WiFi offline"
-                                               : "Blesky: vrstva vypnuta");
-    return false;
-  }
-
-  if (!socketStarted_ && static_cast<int32_t>(millis() - reconnectAtMs_) >= 0) {
-    connectServer();
-  }
-
-  if (socketStarted_) webSocket_.loop();
-
-  // Ping/pong detects a dead TCP/WSS link. This second guard detects a socket
-  // that stays connected but stops delivering valid LightningMaps JSON. A
-  // valid envelope counts even when strokes[] is empty, so quiet weather does
-  // not depend on having a local strike.
-  if (connected_ && socketStarted_) {
-    const uint32_t nowMs = millis();
-    if (lastValidFrameMs_ == 0U) {
-      if (connectedAtMs_ != 0U &&
-          nowMs - connectedAtMs_ >= Config::LIGHTNING_FIRST_DATA_TIMEOUT_MS) {
-        forceReconnect("no first JSON frame");
-      }
-    } else if (nowMs - lastValidFrameMs_ >=
-               Config::LIGHTNING_STALE_DATA_TIMEOUT_MS) {
-      forceReconnect("no valid JSON data");
-    }
-  }
-
-  const time_t now = time(nullptr);
-  if (now > 1700000000) pruneOldStrikes(static_cast<uint32_t>(now));
-
-  if (strikeCount_ > 0 &&
-      millis() - lastAgeRedrawMs_ >= Config::LIGHTNING_REDRAW_MS) {
-    lastAgeRedrawMs_ = millis();
-    dataChanged_ = true;
-  }
-  return dataChanged_;
 }
 
 void LightningService::onWebSocketEvent(WStype_t type, uint8_t* payload,
@@ -240,6 +283,9 @@ bool LightningService::handleJsonMessage(const uint8_t* payload,
   lastValidFrameMs_ = lastSuccessMs_;
 
   JsonArray strokes = (*jsonDoc_)["strokes"].as<JsonArray>();
+  if (!strikeMutex_ || xSemaphoreTake(strikeMutex_, pdMS_TO_TICKS(50)) != pdTRUE) {
+    return false;
+  }
   size_t accepted = 0;
   for (JsonObject stroke : strokes) {
     const uint64_t timeMs = stroke["time"] | 0ULL;
@@ -266,10 +312,13 @@ bool LightningService::handleJsonMessage(const uint8_t* payload,
     }
   }
 
+  const size_t countAfter = strikeCount_;
+  xSemaphoreGive(strikeMutex_);
+
   if (jsonMessages_ <= 3U || accepted > 0U || (jsonMessages_ & 0x7FU) == 1U) {
     snprintf(status_, sizeof(status_),
              "Blesky: LightningMaps LIVE, %u bodu",
-             static_cast<unsigned>(strikeCount_));
+             static_cast<unsigned>(countAfter));
   }
   return true;
 }
@@ -288,7 +337,8 @@ bool LightningService::addStrike(uint32_t epochSec, float lat, float lon,
   // LightningMaps provides a stable stroke id. Prefer it for duplicate
   // suppression after reconnects/replayed batches; retain a coordinate/time
   // fallback in case an id is ever missing.
-  const size_t check = min(strikeCount_, static_cast<size_t>(32));
+  const size_t currentCount = strikeCount_;
+  const size_t check = min(currentCount, static_cast<size_t>(32));
   for (size_t i = 0; i < check; ++i) {
     const size_t idx = (strikeWrite_ + kMaxStrikes - 1 - i) % kMaxStrikes;
     const Strike& old = strikes_[idx];
@@ -306,21 +356,24 @@ bool LightningService::addStrike(uint32_t epochSec, float lat, float lon,
 }
 
 void LightningService::pruneOldStrikes(uint32_t nowEpoch) {
-  if (!strikes_ || strikeCount_ == 0) return;
-  const uint32_t cutoff = nowEpoch > kHistorySeconds ? nowEpoch - kHistorySeconds : 0;
+  if (!strikes_ || strikeCount_ == 0 || !strikeMutex_) return;
+  if (xSemaphoreTake(strikeMutex_, pdMS_TO_TICKS(50)) != pdTRUE) return;
+  const uint32_t cutoff =
+      nowEpoch > kHistorySeconds ? nowEpoch - kHistorySeconds : 0;
   for (size_t i = 0; i < kMaxStrikes; ++i) {
     if (strikes_[i].epochSec != 0 && strikes_[i].epochSec < cutoff) {
       strikes_[i].epochSec = 0;
       if (strikeCount_ > 0) --strikeCount_;
     }
   }
+  xSemaphoreGive(strikeMutex_);
 }
 
 bool LightningService::recentStrikeWithin(float centerLat, float centerLon,
                                           float radiusKm,
                                           uint32_t maxAgeSec) const {
   if (!strikes_ || strikeCount_ == 0 || radiusKm <= 0.0f ||
-      !isfinite(centerLat) || !isfinite(centerLon)) {
+      !isfinite(centerLat) || !isfinite(centerLon) || !strikeMutex_) {
     return false;
   }
 
@@ -328,16 +381,20 @@ bool LightningService::recentStrikeWithin(float centerLat, float centerLon,
   if (nowTime <= 1700000000) return false;
   const uint32_t nowEpoch = static_cast<uint32_t>(nowTime);
 
+  if (xSemaphoreTake(strikeMutex_, pdMS_TO_TICKS(10)) != pdTRUE) return false;
+  bool found = false;
   for (size_t i = 0; i < kMaxStrikes; ++i) {
     const Strike& strike = strikes_[i];
     if (strike.epochSec == 0 || strike.epochSec > nowEpoch + 5U) continue;
     if (nowEpoch - strike.epochSec > maxAgeSec) continue;
     if (greatCircleDistanceKm(centerLat, centerLon, strike.lat, strike.lon) <=
         radiusKm) {
-      return true;
+      found = true;
+      break;
     }
   }
-  return false;
+  xSemaphoreGive(strikeMutex_);
+  return found;
 }
 
 bool LightningService::ready() const {
@@ -446,11 +503,13 @@ uint16_t LightningService::trailColorForAge(uint32_t ageSec) const {
 bool LightningService::renderLive(uint16_t* destination, uint16_t width,
                                   uint16_t height,
                                   const MapViewport& viewport) const {
-  if (!destination || !ready() || !strikes_) return false;
+  if (!destination || !ready() || !strikes_ || !strikeMutex_) return false;
 
   const time_t nowTime = time(nullptr);
   if (nowTime <= 1700000000) return false;
   const uint32_t nowEpoch = static_cast<uint32_t>(nowTime);
+
+  if (xSemaphoreTake(strikeMutex_, pdMS_TO_TICKS(20)) != pdTRUE) return false;
 
   size_t rendered = 0;
 
@@ -488,5 +547,6 @@ bool LightningService::renderLive(uint16_t* destination, uint16_t width,
       ++rendered;
     }
   }
+  xSemaphoreGive(strikeMutex_);
   return rendered > 0;
 }

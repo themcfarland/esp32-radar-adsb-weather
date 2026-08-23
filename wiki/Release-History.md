@@ -1,3 +1,8 @@
+## 0.30.5-network-recovery
+- LightningMaps WSS přesunut do samostatného tasku.
+- Globální síťový watchdog a recovery AP při zaseknutém Wi-Fi/TCP/TLS stacku.
+- Re-arm web listeneru po Wi-Fi recovery.
+
 ## 0.30.4-adsb-resilience
 
 - ADS-B má prioritu před radar/weather joby.

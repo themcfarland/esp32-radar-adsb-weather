@@ -493,6 +493,49 @@ void DeviceConfigService::serviceNetwork() {
                    static_cast<unsigned>(Config::WIFI_RETRY_MS / 1000UL));
 }
 
+
+void DeviceConfigService::forceNetworkRecovery(const char* reason) {
+  DebugLog::printf("Network failsafe: rebuilding Wi-Fi (%s)\n",
+                   reason ? reason : "network health timeout");
+
+  // Mark the STA state machine idle before resetting the Arduino Wi-Fi
+  // interface. Do not erase credentials; the saved profiles stay in NVS.
+  asyncReconnectActive_ = false;
+  asyncReconnectProfile_ = -1;
+  asyncReconnectVisited_ = 0;
+  asyncReconnectNextCycleMs_ = 0;
+  activeWifiProfile_ = -1;
+
+  if (mdnsStarted_) {
+    MDNS.end();
+    mdnsStarted_ = false;
+  }
+  if (portalActive_) {
+    dnsServer_.stop();
+    WiFi.softAPdisconnect(false);
+    portalActive_ = false;
+    accessPointSsid_ = "";
+  }
+
+  // A short Wi-Fi driver reset clears wedged TCP/TLS/DNS state. 100 ms is
+  // intentionally bounded and far shorter than the old HTTP timeouts.
+  WiFi.disconnect(true, false);
+  delay(100);
+  WiFi.mode(hasEnabledWifiProfile() ? WIFI_AP_STA : WIFI_AP);
+  WiFi.setSleep(false);
+
+  // Always expose a local recovery path first. serviceNetwork() will then try
+  // the saved profiles asynchronously while the AP/web UI remains reachable.
+  startAccessPoint(reason ? reason : "network health recovery");
+  // Re-arm the HTTP listener as well; a full Wi-Fi driver reset can invalidate
+  // the underlying listening socket even though the WebServer object survives.
+  if (serverStarted_) {
+    server_.begin();
+    DebugLog::println("Network failsafe: config web listener re-armed");
+  }
+  asyncReconnectNextCycleMs_ = millis() + 750UL;
+}
+
 void DeviceConfigService::startAccessPoint(const char* reason) {
   if (portalActive_) return;
 
