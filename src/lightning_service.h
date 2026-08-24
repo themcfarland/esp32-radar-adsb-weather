@@ -4,9 +4,6 @@
 #include <ArduinoJson.h>
 #include <WebSocketsClient.h>
 #include <time.h>
-#include <freertos/FreeRTOS.h>
-#include <freertos/semphr.h>
-#include <freertos/task.h>
 
 #include "config.h"
 #include "map_viewport.h"
@@ -20,18 +17,9 @@ class LightningService {
 
   bool begin();
 
-  // Main-task poll. Network/TLS work is handled by a dedicated FreeRTOS task,
-  // so this call never performs DNS/TCP/TLS/WebSocket operations.
+  // Must be called frequently from Arduino loop(). Returns true when a newly
+  // received strike affects the visible map and a redraw is useful.
   bool loop(bool enabled);
-
-  // Delay LightningMaps reconnect handshakes while the bulk HTTP/TLS worker is
-  // active. An already connected WSS stream remains serviced in the background.
-  void setBulkNetworkBusy(bool busy) { bulkNetworkBusy_ = busy; }
-
-  // Release the persistent LightningMaps TLS/WebSocket transport for a short
-  // interval. NetworkWorker uses this only when internal RAM is too fragmented
-  // for a new outbound HTTPS handshake. Strike history remains in PSRAM.
-  void requestTransportYield(uint32_t holdMs);
 
   // Draw the current realtime lightning trail independently of the CHMI
   // radar animation. Colours are based only on strike age versus current time.
@@ -62,8 +50,6 @@ class LightningService {
   static constexpr uint32_t kHistorySeconds =
       Config::LIGHTNING_TRAIL_RED_MAX_AGE_SEC + 120;
 
-  static void taskEntry(void* context);
-  void taskLoop();
   void connectServer();
   void forceReconnect(const char* reason);
   void onWebSocketEvent(WStype_t type, uint8_t* payload, size_t length);
@@ -78,21 +64,14 @@ class LightningService {
   int mapY(float lat, uint16_t height, const MapViewport& viewport) const;
 
   WebSocketsClient webSocket_;
-  TaskHandle_t task_ = nullptr;
-  mutable SemaphoreHandle_t strikeMutex_ = nullptr;
   Strike* strikes_ = nullptr;
   BasicJsonDocument<PsramAllocator>* jsonDoc_ = nullptr;
-  volatile size_t strikeCount_ = 0;
+  size_t strikeCount_ = 0;
   size_t strikeWrite_ = 0;
 
-  volatile bool enabledRequested_ = false;
-  volatile bool bulkNetworkBusy_ = false;
-  volatile bool socketStarted_ = false;
-  volatile bool connected_ = false;
-  volatile bool dataChanged_ = false;
-  volatile bool transportYieldRequested_ = false;
-  volatile uint32_t transportYieldHoldMs_ = 0;
-  volatile uint32_t transportYieldUntilMs_ = 0;
+  bool socketStarted_ = false;
+  bool connected_ = false;
+  bool dataChanged_ = false;
   uint32_t reconnectAtMs_ = 0;
   uint32_t lastSuccessMs_ = 0;
   uint32_t connectedAtMs_ = 0;

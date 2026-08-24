@@ -69,9 +69,6 @@ class DeviceConfigService {
   // it tries the enabled profiles without delay()/wait loops and starts the
   // configuration AP when a full cycle fails.
   void serviceNetwork();
-  // Rebuild the Wi-Fi interface and expose the configuration AP even when
-  // WL_CONNECTED is stuck but sockets/DNS/TLS are no longer usable.
-  void forceNetworkRecovery(const char* reason);
 
   bool stationConnected() const;
   bool portalActive() const { return portalActive_; }
@@ -82,7 +79,6 @@ class DeviceConfigService {
   AircraftAlertConfig alertConfig() const;
   bool consumeRuntimeSettingsChanged();
   bool consumeLcdResyncRequested();
-  bool consumeAdsbInternetRefreshRequested();
   bool consumeMapZoomRequested(MapZoomMode& mode);
   bool otaInProgress() const { return otaInProgress_; }
   void setOtaDisplayCallback(OtaDisplayCallback callback) {
@@ -100,7 +96,6 @@ class DeviceConfigService {
   void handleFactoryReset();
   void handleReboot();
   void handleLcdResync();
-  void handleAdsbInternetRefresh();
   void handleMapZoom();
   void handleOtaPrepare();
   void handleOtaUpload();
@@ -127,7 +122,6 @@ class DeviceConfigService {
   bool restartPending_ = false;
   bool runtimeSettingsChanged_ = false;
   bool lcdResyncRequested_ = false;
-  bool adsbInternetRefreshRequested_ = false;
   bool mapZoomRequestPending_ = false;
   MapZoomMode requestedMapZoom_ = MapZoomMode::Full;
   bool otaInProgress_ = false;

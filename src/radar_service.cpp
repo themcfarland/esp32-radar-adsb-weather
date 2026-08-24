@@ -13,12 +13,6 @@ RadarService* RadarService::active_ = nullptr;
 File RadarService::activeFile_;
 
 namespace {
-
-void releaseSecureHttp(HTTPClient& http, WiFiClientSecure& client) {
-  http.end();
-  client.stop();
-  delay(Config::TLS_POST_REQUEST_SETTLE_MS);
-}
 constexpr char kRadarPrefix[] = "pacz2gmaps3.z_max3d.";
 constexpr char kCacheIndexPath[] = "/radar_names.txt";
 constexpr time_t kValidEpoch = 1700000000;
@@ -180,8 +174,8 @@ bool RadarService::scanLatestFiles(
 
   HTTPClient http;
   http.useHTTP10(true);
-  http.setConnectTimeout(6000);
-  http.setTimeout(12000);
+  http.setConnectTimeout(7000);
+  http.setTimeout(20000);
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
   if (!http.begin(client, Config::RADAR_INDEX_URL)) {
     snprintf(status_, sizeof(status_), "Radar: nelze otevrit index");
@@ -193,29 +187,21 @@ bool RadarService::scanLatestFiles(
   const int code = http.GET();
   if (code != HTTP_CODE_OK) {
     snprintf(status_, sizeof(status_), "Radar index HTTP %d", code);
-    releaseSecureHttp(http, client);
+    http.end();
     return false;
   }
 
   WiFiClient* stream = http.getStreamPtr();
   const uint32_t started = millis();
-  uint32_t lastData = started;
-  // The radar index is only discovery metadata. If CHMI is slow, keep the
-  // already working animation cache instead of occupying the serialized
-  // network worker for tens of seconds and starving ADS-B refreshes.
-  constexpr uint32_t kIndexTotalTimeoutMs = 15000UL;
-  constexpr uint32_t kIndexNoDataTimeoutMs = 5000UL;
   while ((http.connected() || stream->available()) &&
-         millis() - started < kIndexTotalTimeoutMs) {
+         millis() - started < 45000UL) {
     if (!stream->available()) {
       if (!http.connected()) break;
-      if (millis() - lastData > kIndexNoDataTimeoutMs) break;
       delay(2);
       continue;
     }
 
     const String line = stream->readStringUntil('\n');
-    lastData = millis();
     int searchFrom = 0;
     while (true) {
       const int start = line.indexOf(kRadarPrefix, searchFrom);
@@ -245,7 +231,7 @@ bool RadarService::scanLatestFiles(
     }
   }
 
-  releaseSecureHttp(http, client);
+  http.end();
   if (count == 0) {
     snprintf(status_, sizeof(status_), "Radar: prazdny index");
     return false;
@@ -275,11 +261,11 @@ RadarService::DownloadResult RadarService::downloadFile(
   http.addHeader("Accept-Encoding", "identity");
   httpCode = http.GET();
   if (httpCode == HTTP_CODE_NOT_FOUND) {
-    releaseSecureHttp(http, client);
+    http.end();
     return DownloadResult::kNotFound;
   }
   if (httpCode != HTTP_CODE_OK) {
-    releaseSecureHttp(http, client);
+    http.end();
     return DownloadResult::kFailed;
   }
 
@@ -287,7 +273,7 @@ RadarService::DownloadResult RadarService::downloadFile(
   removeIfExists(tempPath);
   File output = LittleFS.open(tempPath, FILE_WRITE);
   if (!output) {
-    releaseSecureHttp(http, client);
+    http.end();
     httpCode = -1001;
     return DownloadResult::kFailed;
   }
@@ -327,7 +313,7 @@ RadarService::DownloadResult RadarService::downloadFile(
   }
 
   output.close();
-  releaseSecureHttp(http, client);
+  http.end();
 
   if (written < 100 || (remaining > 0) || !validatePngFile(tempPath)) {
     removeIfExists(tempPath);
@@ -371,18 +357,21 @@ RadarService::DownloadResult RadarService::downloadFileToMemory(
   http.addHeader("Connection", "close");
   httpCode = http.GET();
   if (httpCode == HTTP_CODE_NOT_FOUND) {
-    releaseSecureHttp(http, client);
+    http.end();
+    client.stop();
     return DownloadResult::kNotFound;
   }
   if (httpCode != HTTP_CODE_OK) {
-    releaseSecureHttp(http, client);
+    http.end();
+    client.stop();
     return DownloadResult::kFailed;
   }
 
   constexpr size_t kMaximumPngBytes = 2U * 1024U * 1024U;
   const int declaredLength = http.getSize();
   if (declaredLength > static_cast<int>(kMaximumPngBytes)) {
-    releaseSecureHttp(http, client);
+    http.end();
+    client.stop();
     httpCode = -1101;
     return DownloadResult::kFailed;
   }
@@ -393,7 +382,8 @@ RadarService::DownloadResult RadarService::downloadFileToMemory(
   data = static_cast<uint8_t*>(heap_caps_malloc(
       capacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
   if (!data) {
-    releaseSecureHttp(http, client);
+    http.end();
+    client.stop();
     httpCode = -1102;
     return DownloadResult::kFailed;
   }
@@ -421,7 +411,8 @@ RadarService::DownloadResult RadarService::downloadFileToMemory(
     delay(2);
   }
 
-  releaseSecureHttp(http, client);
+  http.end();
+  client.stop();
 
   static constexpr uint8_t kPngSignature[8] = {
       0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};

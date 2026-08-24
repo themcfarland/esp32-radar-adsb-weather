@@ -37,15 +37,6 @@ struct PsramHttpBody {
   }
 };
 
-void releaseSecureHttp(HTTPClient& http, WiFiClientSecure& client) {
-  // Explicitly tear down both layers. On long-running ESP32 builds this is
-  // more deterministic than relying only on local destructors and gives lwIP
-  // a short window to return socket/TLS buffers to the internal heap.
-  http.end();
-  client.stop();
-  delay(Config::TLS_POST_REQUEST_SETTLE_MS);
-}
-
 bool downloadJsonBody(HTTPClient& http, const char* providerLabel,
                       int contentLength, PsramHttpBody& body) {
   constexpr size_t kUnknownBodyCapacity = 1024U * 1024U;
@@ -477,7 +468,6 @@ bool AdsbService::fetchLocal(AircraftSnapshot& target) {
   http.addHeader("Connection", "close");
 
   const int code = http.GET();
-  lastNetworkHttpCode_ = code;
   const int contentLength = http.getSize();
   if (code != HTTP_CODE_OK) {
     const String errorText = HTTPClient::errorToString(code);
@@ -530,11 +520,6 @@ bool AdsbService::fetchNetworkProvider(AircraftSnapshot& target,
                                        const char* providerLabel,
                                        const char* host,
                                        const char* url) {
-  // Record the provider being attempted even if DNS/TLS fails. This is used
-  // by the per-source web diagnostics.
-  strlcpy(networkSource_, providerLabel, sizeof(networkSource_));
-  lastNetworkHttpCode_ = 0;
-
   const uint32_t heapFree = ESP.getFreeHeap();
   const uint32_t heapLargest = static_cast<uint32_t>(
       heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
@@ -543,7 +528,6 @@ bool AdsbService::fetchNetworkProvider(AircraftSnapshot& target,
   IPAddress resolved;
   const int dnsOk = WiFi.hostByName(host, resolved);
   if (dnsOk != 1) {
-    lastNetworkHttpCode_ = -1001;
     snprintf(adsbFiStatus_, sizeof(adsbFiStatus_), "%s DNS chyba", providerLabel);
     DebugLog::printf("%s: DNS failed | heap=%u largest=%u psram=%u\n",
                      providerLabel, static_cast<unsigned>(heapFree),
@@ -568,20 +552,18 @@ bool AdsbService::fetchNetworkProvider(AircraftSnapshot& target,
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
 
   if (!http.begin(client, url)) {
-    lastNetworkHttpCode_ = -1002;
     snprintf(adsbFiStatus_, sizeof(adsbFiStatus_), "%s http.begin chyba",
              providerLabel);
     DebugLog::println(adsbFiStatus_);
     return false;
   }
 
-  http.addHeader("User-Agent", "ESP32-Radar-ADSB/0.30.9");
+  http.addHeader("User-Agent", "ESP32-Radar-ADSB/0.28.20");
   http.addHeader("Accept", "application/json");
   http.addHeader("Accept-Encoding", "identity");
   http.addHeader("Connection", "close");
 
   const int code = http.GET();
-  lastNetworkHttpCode_ = code;
   const int contentLength = http.getSize();
   if (code != HTTP_CODE_OK) {
     const String errorText = HTTPClient::errorToString(code);
@@ -600,7 +582,7 @@ bool AdsbService::fetchNetworkProvider(AircraftSnapshot& target,
       if (detail.length() > 120) detail.remove(120);
       DebugLog::printf("%s error body: %s\n", providerLabel, detail.c_str());
     }
-    releaseSecureHttp(http, client);
+    http.end();
     return false;
   }
 
@@ -613,14 +595,12 @@ bool AdsbService::fetchNetworkProvider(AircraftSnapshot& target,
   // parse after all declared bytes arrived.
   PsramHttpBody body;
   if (!downloadJsonBody(http, providerLabel, contentLength, body)) {
-    // HTTP itself succeeded, but the payload did not finish. Keep HTTP 200 in
-    // diagnostics and expose the detailed status string separately.
     snprintf(adsbFiStatus_, sizeof(adsbFiStatus_), "%s body incomplete",
              providerLabel);
-    releaseSecureHttp(http, client);
+    http.end();
     return false;
   }
-  releaseSecureHttp(http, client);
+  http.end();
 
   StaticJsonDocument<1280> filter;
   filter["now"] = true;
@@ -674,27 +654,15 @@ bool AdsbService::fetchAdsbFi(AircraftSnapshot& target) {
            Config::ADSB_FI_CENTER_LON,
            static_cast<unsigned>(Config::ADSB_FI_RADIUS_NM));
 
-  const uint32_t primaryStarted = millis();
   if (fetchNetworkProvider(target, "adsb.fi", "opendata.adsb.fi", primaryUrl)) {
     return true;
   }
 
-  const uint32_t primaryDuration = millis() - primaryStarted;
-  const int primaryCode = lastNetworkHttpCode_;
-  // Do not launch a second TLS handshake after DNS/TLS/socket failures, low
-  // memory symptoms (negative/internal codes), or an incomplete HTTP 200 body.
-  // A fallback is useful only when adsb.fi itself returned a real HTTP error.
-  // This prevents a failed handshake from being immediately followed by
-  // another expensive handshake against adsb.lol.
-  if (primaryCode < 400 || primaryCode >= 600 || primaryDuration >= 10000UL) {
-    DebugLog::printf(
-        "adsb.fi: fallback suppressed code=%d duration=%u ms\n",
-        primaryCode, static_cast<unsigned>(primaryDuration));
-    return false;
-  }
-
+  // adsb.lol exposes the same readsb/ADSBExchange-compatible aircraft fields.
+  // It is used only as a fallback when adsb.fi cannot establish/parse a
+  // request, so the normal source remains adsb.fi and request load stays low.
   resetSnapshot(target);
-  delay(Config::TLS_POST_REQUEST_SETTLE_MS);
+  delay(25);
   char fallbackUrl[192];
   snprintf(fallbackUrl, sizeof(fallbackUrl),
            "%s/v2/lat/%.4f/lon/%.4f/dist/%u",

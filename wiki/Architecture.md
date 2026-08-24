@@ -31,12 +31,6 @@ barometr a astronomie                forecast
 
 Worker provádí **jen jednu klasickou HTTP/HTTPS úlohu současně**. Tím se několik TLS klientů nepere o interní heap a Wi-Fi buffery. Po dokončení se hotová data zkopírují nebo krátce prohodí do aktivní cache v hlavní úloze.
 
-Od v0.30.9 je TLS ochrana adaptivní. Běžný nebo varovný stav paměti HTTPS
-neblokuje. LightningMaps WSS se při běžném paměťovém tlaku uvolní až po
-skutečné chybě TLS/socketu a pouze jednou do dalšího úspěchu. Pouze kritický
-pre-flight stav (38 kB free / 26 kB largest) může jednu úlohu předem odložit;
-návrat používá hysterézi 44/32 kB.
-
 ### Chování při výpadku služby
 
 Každý zdroj má vlastní stav a backoff. Při chybě se poslední platná data nemažou:
@@ -90,14 +84,3 @@ Požadavky se plánují přibližně v těchto intervalech; skutečné spuštěn
 - astronomie: 1 min,
 - BMP180: 1 min,
 - nový cyklus Wi-Fi reconnectu: přibližně 15 s po neúspěchu všech profilů.
-
-## LightningMaps a recovery sítě (v0.30.5)
-
-LightningMaps WSS již neběží v hlavním Arduino loopu. Samostatný task `lightning-net` na core 0 obsluhuje WebSocket, heartbeat i reconnect. Hlavní loop pouze přebírá příznak nových blesků a kreslí data z chráněného PSRAM bufferu.
-
-Pokud jsou po dobu 3 minut současně stale adsb.fi, LightningMaps a také lokální ADS-B (je-li zapnutý), firmware považuje stav za zaseknutý síťový stack. Pozastaví NetworkWorker, krátce znovu inicializuje Wi-Fi, spustí recovery AP a znovu aktivuje HTTP listener. Cooldown dalšího takového zásahu je 10 minut.
-
-
-### ADS-B internet recovery
-
-Internetove ADS-B ma vlastni kratky backoff 15/30/max. 60 s. Pokud cache vyprsi, hlavni smycka nejpozdeji kazdych 30 s vynuti novy de-duplikovany NetworkWorker job. Lokalni ADS-B ma stale vyssi prioritu a zustava nezavisle funkcni.

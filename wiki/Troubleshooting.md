@@ -60,36 +60,3 @@ Od 0.30.0 se HTTP/TLS zdroje zpracovávají po jednom na pozadí. Poslední dobr
 ## Obraz se při zátěži posune
 
 Od verze **0.30.0** jsou dlouhé runtime HTTP/TLS operace přesunuty mimo hlavní smyčku do `NetworkWorker`, takže výpadek adsb.fi, ČHMÚ, Open-Meteo/WU nebo lokálního ADS-B nemá čekáním blokovat LVGL/mapu. Stále zůstává load guard z 0.29.4 a navíc síťový guard po mimořádně dlouhé nebo chybové síťové úloze. Oba mechanismy mohou naplánovat jednorázové srovnání RGB DMA, nejvýše jednou za ochranný interval; nejde o periodický restart panelu. Pokud by obraz zůstal posunutý, ruční **Srovnat LCD** je stále na webu. V diagnostice zkontrolujte také kartu **Síťový worker** a položku nejdelší úlohy.
-
-
-## Radar hlásí „index nedostupný, cache běží“ a letadla
-
-Tato hláška patří pouze radaru ČHMÚ. Od 0.30.4 nesmí krátký výpadek radarového indexu vyprázdnit ADS-B vrstvu: worker upřednostní local/adsb.fi a poslední platná aircraft cache zůstane dočasně zobrazena. Pokud letadla přesto zmizí, zkontrolujte v Diagnostice `ADSB`, `Síťový worker / Aktivní úloha` a `Poslední úloha`.
-
-## Web nejde otevřít a několik datových zdrojů současně stojí
-
-Od v0.30.5 je LightningMaps WSS mimo hlavní UI loop. Pokud navíc firmware zjistí současný výpadek několika nezávislých zdrojů při stále hlášeném `WL_CONNECTED`, provede Wi-Fi recovery a zpřístupní AP `Radar-ADSB-Setup-XXXX` (`192.168.4.1`, heslo `radarsetup`). Tento mechanismus je záměrně konzervativní a má 10min cooldown.
-
-
-### Lokalni letadla jsou videt, ale adsb.fi ne
-
-V Diagnostice zkontrolujte blok ADS-B internet. Zobrazuje posledni zdroj, HTTP kod, stari pokusu/uspechu, pocet po sobe jdoucich chyb a cas do dalsiho pokusu. Tlacitko **Obnovit internetove ADS-B** zrusi aktualni backoff a okamzite zaradi novy request bez restartu Wi-Fi. Automaticky backoff je omezen na 60 s a pri vyprseni internetove cache se recovery pokus vynuti nejpozdeji kazdych 30 s.
-
-## Internetové HTTPS zdroje přestanou fungovat, lokální ADS-B běží
-
-Od v0.30.9 sledujte v Diagnostice položku **TLS guard** se stavy `OK`,
-`VAROVANI` a `KRITICKA RAM`. Největší interní blok přibližně 30-36 kB už není
-důvodem k preventivnímu odpojení LightningMaps: HTTPS se normálně zkusí.
-Pokud skutečný TLS/socket request selže při paměťovém tlaku (méně než 48 kB
-volné interní RAM nebo největší blok pod 36 kB), firmware jednou uvolní
-LightningMaps WSS na 20 s a provede rychlejší další pokus. Tento recovery se
-opakuje až po dalším úspěšném spojení, takže WSS není cyklicky odpojován.
-
-Kritický pre-flight stav začíná pod 38 kB volné interní RAM nebo pod 26 kB
-největšího bloku. V tomto stavu se jedna HTTPS úloha krátce odloží a WSS se
-uvolní jako bezpečnostní opatření. Návrat z kritického stavu používá hysterézi
-(44 kB free a 32 kB largest), aby stav nekmital kolem hranice. Skutečné HTTP
-chyby 4xx/5xx u adsb.fi WSS recovery nespouštějí.
-
-adsb.lol se po DNS/TLS/socket chybě adsb.fi nespouští okamžitě, aby nevznikl
-druhý náročný TLS handshake.

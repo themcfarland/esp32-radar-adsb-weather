@@ -78,20 +78,10 @@ constexpr float ADSB_FI_CENTER_LAT = 49.80f;
 constexpr float ADSB_FI_CENTER_LON = 15.35f;
 constexpr uint16_t ADSB_FI_RADIUS_NM = 180;
 constexpr uint32_t ADSB_FI_REFRESH_MS = 10UL * 1000UL;
-// Internet ADS-B is a realtime overlay. Do not let a temporary provider/TLS
-// failure hide remote aircraft for several minutes: retries are capped at 60 s
-// and an expired cache forces one recovery attempt at least every 30 s.
-constexpr uint32_t ADSB_FI_RECOVERY_RETRY_MS = 30UL * 1000UL;
-constexpr uint32_t ADSB_FI_BACKOFF_FIRST_MS = 15UL * 1000UL;
-constexpr uint32_t ADSB_FI_BACKOFF_SECOND_MS = 30UL * 1000UL;
-constexpr uint32_t ADSB_FI_BACKOFF_MAX_MS = 60UL * 1000UL;
-// Keep the last good aircraft snapshots long enough to survive one bounded
-// bulk HTTPS job in the serialized network worker. Source records themselves
-// are still accepted only when seen_pos <= AIRCRAFT_MAX_AGE_SEC.
-constexpr uint32_t ADSB_LOCAL_CACHE_MAX_AGE_MS = 60UL * 1000UL;
+constexpr uint32_t ADSB_LOCAL_CACHE_MAX_AGE_MS = 10UL * 1000UL;
 constexpr uint8_t ADSB_LOCAL_BACKOFF_AFTER_FAILURES = 3;
 constexpr uint32_t ADSB_LOCAL_FAILURE_BACKOFF_MS = 30UL * 1000UL;
-constexpr uint32_t ADSB_FI_CACHE_MAX_AGE_MS = 120UL * 1000UL;
+constexpr uint32_t ADSB_FI_CACHE_MAX_AGE_MS = 30UL * 1000UL;
 constexpr uint32_t RADAR_REFRESH_MS = 5UL * 60UL * 1000UL;
 constexpr uint32_t RADAR_ANIMATION_MS = 1400;
 // Personal-station observations refresh every 5 min; the 48 h hourly forecast hourly.
@@ -101,34 +91,6 @@ constexpr uint32_t ASTRONOMY_REFRESH_MS = 60UL * 1000UL;
 constexpr uint32_t BAROMETER_REFRESH_MS = 60UL * 1000UL;
 constexpr uint32_t PRESSURE_HISTORY_STEP_MS = 5UL * 60UL * 1000UL;
 constexpr uint32_t WIFI_RETRY_MS = 15UL * 1000UL;
-// If several independent network feeds are stale while STA still reports
-// connected, rebuild Wi-Fi and expose the configuration AP as a failsafe.
-constexpr uint32_t NETWORK_GLOBAL_STALE_MS = 3UL * 60UL * 1000UL;
-constexpr uint32_t NETWORK_RECOVERY_COOLDOWN_MS = 10UL * 60UL * 1000UL;
-
-// Adaptive TLS resource guard. Measurements from real hardware showed that
-// HTTPS still works reliably with a ~35 kB largest internal block, so the old
-// 36 kB pre-flight cut-off was too aggressive and repeatedly disconnected the
-// LightningMaps WSS even while adsb.fi returned HTTP 200.
-//
-// Normal/warning range: always try the TLS request. Only a truly critical
-// pre-flight state is deferred once. A wider failure window is used *after* a
-// real TLS/socket failure; only then is LightningMaps asked to release its
-// persistent TLS transport for one recovery attempt. Hysteresis prevents the
-// critical state from flapping around the threshold.
-constexpr uint32_t TLS_GUARD_CRITICAL_FREE_INTERNAL = 38UL * 1024UL;
-constexpr uint32_t TLS_GUARD_WARNING_LARGEST_BLOCK = 30UL * 1024UL;
-constexpr uint32_t TLS_GUARD_CRITICAL_LARGEST_BLOCK = 26UL * 1024UL;
-constexpr uint32_t TLS_GUARD_RECOVER_FREE_INTERNAL = 44UL * 1024UL;
-constexpr uint32_t TLS_GUARD_RECOVER_LARGEST_BLOCK = 32UL * 1024UL;
-// If a real TLS/socket request fails while memory is in this wider pressure
-// window, release LightningMaps once and retry soon. This catches the earlier
-// ~42 kB free / ~32 kB largest-block failure without penalising successful TLS.
-constexpr uint32_t TLS_RECOVERY_FAILURE_FREE_INTERNAL = 48UL * 1024UL;
-constexpr uint32_t TLS_RECOVERY_FAILURE_LARGEST_BLOCK = 36UL * 1024UL;
-constexpr uint32_t TLS_GUARD_RETRY_MS = 5UL * 1000UL;
-constexpr uint32_t TLS_GUARD_LIGHTNING_YIELD_MS = 20UL * 1000UL;
-constexpr uint32_t TLS_POST_REQUEST_SETTLE_MS = 20UL;
 
 // RGB LCD recovery guard. A blind periodic DMA restart was intentionally
 // removed in v0.20.1 because frequent restarts made horizontal movement worse.

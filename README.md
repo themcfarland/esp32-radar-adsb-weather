@@ -1,19 +1,9 @@
 # Waveshare 7" Radar ČR + ADS-B + počasí
 
-Firmware **0.30.9-adaptive-tls-guard** je veřejná česká varianta projektu pro
+Firmware **0.30.3-home-map-buttons** je veřejná česká varianta projektu pro
 **Waveshare ESP32-S3-Touch-LCD-7 (800×480, ST7262, GT911, 8 MB OPI PSRAM)**.
 Po stažení z GitHubu neobsahuje osobní Wi-Fi, Weather Underground stanici ani
 lokální IP adresu ADS-B přijímače.
-
-### 0.30.9 - adaptivní TLS guard
-
-TLS ochrana už preventivně neodpojuje LightningMaps při běžném bloku kolem 35 kB.
-Normální a varovný stav vždy zkusí HTTPS; kritický stav má hysterézi a pouze jedno
-odložení. LightningMaps se při běžném tlaku na paměť uvolní až po skutečné chybě
-TLS/socketu a jen jednou do dalšího úspěšného spojení. Diagnostika rozlišuje
-`OK / VAROVANI / KRITICKA RAM` a pre-flight defer nepřepisuje poslední skutečný
-výsledek adsb.fi.
-
 
 ## Nová síťová architektura v0.30.0
 
@@ -30,7 +20,7 @@ seriově zpracovává:
 V jednu chvíli se provádí pouze **jedna klasická HTTP/HTTPS úloha**. Hotová
 data se předají hlavnímu vláknu až po dokončení přenosu a parsování. LVGL,
 animace mapy, dotyk a hodiny proto pokračují i při timeoutu vzdáleného serveru.
-LightningMaps má od v0.30.5 vlastní nízkoprioritní FreeRTOS task na core 0. WSS reconnect a případné DNS/TLS čekání proto už neběží v hlavním UI loopu a nemůže zastavit webové rozhraní nebo překreslování displeje.
+LightningMaps zůstává jako lehký realtime WebSocket obsluhovaný průběžně.
 
 Při chybě služby se zachovají poslední platná data a pro další pokusy se použije
 postupný backoff. Runtime reconnect Wi-Fi je nově **neblokující stavový automat**:
@@ -41,27 +31,6 @@ Webová diagnostika navíc ukazuje aktivní síťovou úlohu, počet čekající
 čas poslední a nejdelší úlohy, počet chyb a backoffů. Pokud je background
 operace mimořádně dlouhá nebo selže, může se po dokončení naplánovat jeden
 RGB DMA resync; platí stejný minimální 90s cooldown jako u display load guardu.
-
-
-## TLS resource guard v0.30.7
-
-Dlouhodobý provoz ukázal, že několik MB volné PSRAM nestačí k zaručení nového
-HTTPS spojení: mbedTLS potřebuje také dostatečně velký souvislý blok interní
-RAM. Před každým externím HTTPS jobem proto NetworkWorker kontroluje volnou
-interní RAM a největší souvislý blok. Při nízké/fragmentované RAM se job na
-5 s odloží a LightningMaps na 20 s uvolní svůj WSS/TLS transport; historie
-blesků v PSRAM zůstává zachována. Po čtyřech odkladech se povolí jeden
-omezený skutečný pokus, aby konzervativní práh nemohl zdroj trvale vyhladovět.
-
-Po každém HTTPS requestu se explicitně ukončí HTTP i TCP/TLS klient a nechá se
-krátký čas lwIP na vrácení socketových bufferů. adsb.lol se už nespouští po
-DNS/TLS/socket chybě adsb.fi ani po neúplném HTTP 200 těle; fallback se použije
-jen při skutečné HTTP chybě serveru (4xx/5xx). Diagnostika ukazuje stav TLS
-guardu, interní heap/blok, počty odkladů, vynucených pokusů a WSS yieldů.
-
-## Recovery při globálním síťovém výpadku
-
-Pokud `WL_CONNECTED` zůstane viset, ale několik nezávislých datových zdrojů současně přestane přijímat data, firmware po 3 minutách vyhodnotí stav jako poruchu síťového stacku. NetworkWorker se pozastaví, Wi-Fi rozhraní se krátce znovu inicializuje a současně se spustí konfigurační AP `Radar-ADSB-Setup-XXXX` na `192.168.4.1`. Web listener se znovu aktivuje a uložené Wi-Fi profily se zkoušejí neblokujícím stavovým automatem. Další automatický zásah je povolen nejdříve za 10 minut.
 
 ## První spuštění
 
@@ -198,12 +167,3 @@ Hlavni LCD obrazovka uz nezobrazuje tlacitka **PAUZA** a **OBNOVIT**. Radarova a
 ### Okamzite prepinani mapy z webu
 
 V sekci HOME jsou ctyri tlacitka `Cela CR / 50 km / 25 km / 10 km`. Stisk tlacitka okamzite vycentruje LCD mapu na ulozenou polohu HOME a ulozi mapovy rezim do NVS; neni nutne odesilat cely formular.
-
-### Odolnost ADS-B při výpadku jiného serveru
-
-Síťové operace jsou serializované. Verze 0.30.4 proto chrání ADS-B před pomalým ČHMÚ/HTTPS jobem: lokální a internetový ADS-B mají nejvyšší prioritu, radarový index má krátký hard limit a poslední dobré aircraft snapshoty se po krátkou dobu zachovají. Stav `Radar: index nedostupny, cache bezi` tedy znamená pouze problém s aktualizací radarového indexu; nemá vymazat letadla.
-
-
-## ADS-B internet recovery (0.30.6)
-
-Internetove ADS-B (`adsb.fi`, pripadne rychly fallback `adsb.lol`) ma kratky recovery backoff 15/30/max. 60 s. Pokud posledni internetovy snapshot zestarnul nad platnost cache, firmware vynuti nejpozdeji kazdych 30 s novy pokus. Webova diagnostika zobrazuje stav lokalniho a internetoveho ADS-B oddelene a umoznuje rucne zaradit okamzity internetovy refresh bez restartu zarizeni.

@@ -55,8 +55,3 @@ Pomalý nebo nedostupný server se tak dá diagnostikovat bez toho, aby musel bl
 ## Paměť
 
 Pro stabilitu TLS je důležitý nejen celkový free heap, ale hlavně `largest free block`. Pokud výrazně klesne, velké HTTPS operace mohou selhávat i při dostatku PSRAM. Síťový worker záměrně serializuje velké TLS operace, aby se tomuto stavu předcházelo.
-
-Diagnostika v0.30.9 navíc rozlišuje TLS paměť `OK / VAROVANI / KRITICKA RAM`.
-Hodnota kolem 35 kB největšího bloku sama o sobě již nezastavuje HTTPS; recovery
-LightningMaps se spouští až po skutečném transportním selhání, případně při
-opravdu kritickém pre-flight stavu.

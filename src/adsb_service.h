@@ -44,9 +44,6 @@ class AdsbService {
     return localEnabled_ ? lastLocalSuccessMs_ : 0U;
   }
   uint32_t lastNetworkSuccessMs() const { return lastAdsbFiSuccessMs_; }
-  int lastNetworkHttpCode() const { return lastNetworkHttpCode_; }
-  const char* networkSource() const { return networkSource_; }
-  const char* networkStatus() const { return adsbFiStatus_; }
 
   // Network-worker integration. Background tasks fetch into private worker
   // instances; the main task then imports only the completed snapshot and
@@ -73,7 +70,6 @@ class AdsbService {
   uint32_t lastLocalSuccessMs_ = 0;
   uint32_t lastAdsbFiSuccessMs_ = 0;
   uint32_t lastAdsbFiAttemptMs_ = 0;
-  int lastNetworkHttpCode_ = 0;
   char adsbFiStatus_[96] = "adsb.fi: waiting";
   char networkSource_[16] = "adsb.fi";
 };
