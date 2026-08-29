@@ -8,8 +8,8 @@ cpp = (root / "src/adsb_service.cpp").read_text()
 renderer = (root / "src/map_renderer.cpp").read_text()
 
 assert 'https://opendata.adsb.fi/api' in config
-assert 'ADSB_FI_RADIUS_NM = 180' in config
-assert 'ADSB_FI_REFRESH_MS = 10UL * 1000UL' in config
+assert 'ADSB_FI_RADIUS_NM = 110' in config
+assert 'ADSB_FI_REFRESH_MS = 30UL * 1000UL' in config
 assert 'MAX_AIRCRAFT = 180' in config
 assert 'fetchAdsbFi' in cpp
 assert '"ac"' in cpp

@@ -9,6 +9,8 @@
 #include "radar_service.h"
 #include "weather_service.h"
 
+class LightningService;
+
 class NetworkWorker {
  public:
   enum class Job : uint8_t {
@@ -31,12 +33,13 @@ class NetworkWorker {
     uint32_t backoffSkips = 0;
     char activeJob[24] = "idle";
     char lastResult[96] = "network worker ceka";
+    AdsbService::NetworkDiagnostics adsbFi;
   };
 
   NetworkWorker();
   ~NetworkWorker();
 
-  bool begin(RadarService* radar);
+  bool begin(RadarService* radar, LightningService* lightning = nullptr);
   void configure(const String& localAdsbUrl, bool localAdsbEnabled,
                  const String& wuApiKey, const String& wuStationId,
                  float latitude, float longitude);
@@ -83,6 +86,7 @@ class NetworkWorker {
   }
 
   RadarService* radar_ = nullptr;
+  LightningService* lightning_ = nullptr;
   AdsbService* localAdsbWorker_ = nullptr;
   AdsbService* internetAdsbWorker_ = nullptr;
   WeatherService* weatherWorker_ = nullptr;

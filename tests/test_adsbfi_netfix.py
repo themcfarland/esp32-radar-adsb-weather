@@ -9,14 +9,15 @@ config = (ROOT / "include" / "config.h").read_text()
 main = (ROOT / "src" / "main.cpp").read_text()
 version = (ROOT / "include" / "version.h").read_text()
 
-assert "0.30.3-home-map-buttons" in version
+assert "0.30.16-adsbfi-110nm" in version
 assert "AircraftSnapshot* localCache_" in adsb_h
 assert "AircraftSnapshot* adsbFiCache_" in adsb_h
 assert "MALLOC_CAP_SPIRAM" in adsb
 assert "BasicJsonDocument<PsramAllocator>* jsonDoc_" in light_h
 assert "new BasicJsonDocument<PsramAllocator>(kJsonCapacity)" in light
-assert "ADSB_LOL_BASE_URL" in config
-assert "api.adsb.lol" in adsb
+assert "ADSB_LOL_BASE_URL" not in config
+assert "api.adsb.lol" not in adsb
+assert "adsb.lol" not in adsb
 assert "opendata.adsb.fi" in adsb
 assert "WiFi.hostByName" in adsb
 assert "HTTPClient::errorToString" in adsb

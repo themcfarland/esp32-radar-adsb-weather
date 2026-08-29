@@ -32,6 +32,10 @@ Firmware používá PSRAM body buffer a až poté JSON parser. Pokud Serial ukaz
 
 Tato hláška se může objevit po uzavření síťového socketu v Arduino-ESP32. Pokud následující request a funkce normálně pokračují, nejde sama o sobě o fatální chybu.
 
+## LightningMaps se po připojení stále odpojuje
+
+Od verze 0.30.5 firmware počítá s velkými úvodními WebSocket dávkami. `arduinoWebSockets 2.7.2` je při buildu patchováno na RX limit 192 kB a payload je ukládán do PSRAM. V `/diagnostics` zkontrolujte **WSS RX ramec posledni / max**, **JSON zpravy / chyby** a **WSS odpojeni**. Pokud je max rámec >15 kB a JSON zprávy přibývají bez chyb, oprava funguje.
+
 ## LightningMaps je připojeno, ale nejsou blesky
 
 Feed může legitimně vracet prázdné `strokes`. Diagnostika rozlišuje živý JSON stream od samotné přítomnosti blesků. Při zastavení platných rámců watchdog spojení obnoví.

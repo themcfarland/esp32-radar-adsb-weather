@@ -5,7 +5,7 @@ h = (root / 'src/device_config.h').read_text()
 cpp = (root / 'src/device_config.cpp').read_text()
 version = (root / 'include/version.h').read_text()
 
-assert '0.30.3-home-map-buttons' in version
+assert '0.30.16-adsbfi-110nm' in version
 assert 'WIFI_PROFILE_COUNT = 5' in h
 assert 'WifiProfile wifiProfiles[WIFI_PROFILE_COUNT]' in h
 assert 'wifi_multi' in cpp
@@ -22,4 +22,11 @@ assert 'Wi-Fi profile NVS read-back verification failed' in cpp
 assert 'all saved Wi-Fi profiles failed' in cpp
 assert 'no Wi-Fi profile is enabled' in cpp
 assert 'WiFi.mode(hasEnabledWifiProfile() ? WIFI_AP_STA : WIFI_AP)' in cpp
+
+assert 'strongestScannedApForSsid' in cpp
+assert 'WiFi.BSSID(i)' in cpp and 'WiFi.channel(i)' in cpp
+assert 'WiFi.begin(profile.ssid.c_str(), profile.password.c_str(), ap->channel' in cpp
+assert 'WiFi.scanNetworks(false, true)' in cpp
+assert 'WiFi.scanNetworks(true, true)' in cpp
+assert 'asyncWifiScanPending_' in h and 'asyncWifiScanReady_' in h
 print('WIFI PROFILES TEST OK')

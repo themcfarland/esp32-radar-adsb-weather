@@ -450,7 +450,7 @@ bool WeatherService::fetchOpenMeteoForecast(int& httpCode) {
 
   // getString() lets HTTPClient remove transport framing before ArduinoJson
   // sees the data. The 12-hour response is only a few kilobytes and the
-  // forecast is downloaded once per hour.
+  // forecast is downloaded once every two hours.
   String payload = http.getString();
   http.end();
   DebugLog::printf("Forecast Open-Meteo: body received, %u bytes\n",

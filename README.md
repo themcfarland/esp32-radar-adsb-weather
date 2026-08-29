@@ -1,9 +1,13 @@
 # Waveshare 7" Radar ČR + ADS-B + počasí
 
-Firmware **0.30.3-home-map-buttons** je veřejná česká varianta projektu pro
+Firmware **0.30.16-adsbfi-110nm** je veřejná česká varianta projektu pro
 **Waveshare ESP32-S3-Touch-LCD-7 (800×480, ST7262, GT911, 8 MB OPI PSRAM)**.
 Po stažení z GitHubu neobsahuje osobní Wi-Fi, Weather Underground stanici ani
 lokální IP adresu ADS-B přijímače.
+
+Ve verzi **0.30.16** je internetový ADSB.fi příjem omezen na **110 NM**. Oprava pro odpovědi
+s `Transfer-Encoding: chunked` zůstává zachována: HTTP chunky dekóduje přímo `HTTPClient` a
+dekódované JSON tělo se ukládá do PSRAM.
 
 ## Nová síťová architektura v0.30.0
 
@@ -12,7 +16,7 @@ v hlavní Arduino smyčce. Samostatný FreeRTOS **NetworkWorker na core 0**
 seriově zpracovává:
 
 - lokální `aircraft.json`,
-- adsb.fi / adsb.lol,
+- adsb.fi,
 - aktuální počasí,
 - ČHMÚ radarový update,
 - hodinovou předpověď.
@@ -20,7 +24,7 @@ seriově zpracovává:
 V jednu chvíli se provádí pouze **jedna klasická HTTP/HTTPS úloha**. Hotová
 data se předají hlavnímu vláknu až po dokončení přenosu a parsování. LVGL,
 animace mapy, dotyk a hodiny proto pokračují i při timeoutu vzdáleného serveru.
-LightningMaps zůstává jako lehký realtime WebSocket obsluhovaný průběžně.
+LightningMaps používá samostatný FreeRTOS **WSS worker na core 1**. Knihovna arduinoWebSockets při příjmu čeká na celý WebSocket payload, proto již neběží v hlavní Arduino smyčce: ani velký nebo pomalu doručovaný frame tak nezastaví lokální web, LVGL ani předávání výsledků lokálního ADS-B. Velké úvodní historické JSON dávky nad 32 KiB se pouze odčerpají a neparsují; menší realtime dávky se filtrují a ukládají do PSRAM.
 
 Při chybě služby se zachovají poslední platná data a pro další pokusy se použije
 postupný backoff. Runtime reconnect Wi-Fi je nově **neblokující stavový automat**:
@@ -167,3 +171,12 @@ Hlavni LCD obrazovka uz nezobrazuje tlacitka **PAUZA** a **OBNOVIT**. Radarova a
 ### Okamzite prepinani mapy z webu
 
 V sekci HOME jsou ctyri tlacitka `Cela CR / 50 km / 25 km / 10 km`. Stisk tlacitka okamzite vycentruje LCD mapu na ulozenou polohu HOME a ulozi mapovy rezim do NVS; neni nutne odesilat cely formular.
+
+
+## CHMI radar runtime timing
+
+Pri synchronizovanem case se novy 5min radarovy snimek zkousi primo v +30 s, +50 s a +70 s po slotu; po uspechu se dalsi pokusy preskoci.
+
+### ADSB.fi diagnostika v0.30.14
+
+Diagnostika zarizeni a `/api/diagnostics` nyni uchovavaji posledni vysledek ADSB.fi nezavisle na rychlem lokalnim ADS-B pollingu: DNS/IP, HTTP kod a chybu, Content-Length, pocet stazenych bajtu, chybu body/JSON, pocty letadel a delku pozadavku. Internetovy ADS-B backoff je omezen na 120 s pro rychlejsi diagnostiku.

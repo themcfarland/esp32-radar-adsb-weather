@@ -542,14 +542,64 @@ void updateRuntimeDiagnostics() {
           sizeof(runtimeDiagnostics.networkLastResult));
   runtimeDiagnostics.radarFrameCount = radar.frameCount();
   runtimeDiagnostics.currentRadarFrame = radarFrame;
+  strlcpy(runtimeDiagnostics.radarExpectedFrame, radar.expectedRuntimeFrame(),
+          sizeof(runtimeDiagnostics.radarExpectedFrame));
+  runtimeDiagnostics.radarNextFetchSec =
+      radar.secondsUntilNextRuntimeRefresh(time(nullptr));
+  runtimeDiagnostics.radarDirectRequests = radar.directRequestCount();
+  runtimeDiagnostics.radarDirectSuccess = radar.directSuccessCount();
+  runtimeDiagnostics.radarDirectNotFound = radar.directNotFoundCount();
+  runtimeDiagnostics.radarDirectTransportFailures = radar.directTransportFailureCount();
+  runtimeDiagnostics.radarLastHttpCode = radar.lastDirectHttpCode();
+  runtimeDiagnostics.radarIndexFallbacks = radar.indexFallbackCount();
   runtimeDiagnostics.forecastSlotCount = weatherData.forecastSlotCount;
   runtimeDiagnostics.aircraftCount = aircraft.count;
   runtimeDiagnostics.localAircraftCount = aircraft.localCount;
   runtimeDiagnostics.adsbFiAircraftCount = aircraft.adsbFiCount;
   runtimeDiagnostics.mlatAircraftCount = aircraft.mlatCount;
+  runtimeDiagnostics.adsbFiAttempts = networkDiag.adsbFi.attempts;
+  runtimeDiagnostics.adsbFiSuccesses = networkDiag.adsbFi.successes;
+  runtimeDiagnostics.adsbFiFailures = networkDiag.adsbFi.failures;
+  runtimeDiagnostics.adsbFiDnsOk = networkDiag.adsbFi.dnsOk;
+  strlcpy(runtimeDiagnostics.adsbFiResolvedIp, networkDiag.adsbFi.resolvedIp,
+          sizeof(runtimeDiagnostics.adsbFiResolvedIp));
+  runtimeDiagnostics.adsbFiHttpCode = networkDiag.adsbFi.httpCode;
+  strlcpy(runtimeDiagnostics.adsbFiHttpError, networkDiag.adsbFi.httpError,
+          sizeof(runtimeDiagnostics.adsbFiHttpError));
+  runtimeDiagnostics.adsbFiContentLength = networkDiag.adsbFi.contentLength;
+  runtimeDiagnostics.adsbFiBodyBytes = networkDiag.adsbFi.bodyBytes;
+  strlcpy(runtimeDiagnostics.adsbFiBodyError, networkDiag.adsbFi.bodyError,
+          sizeof(runtimeDiagnostics.adsbFiBodyError));
+  runtimeDiagnostics.adsbFiJsonOk = networkDiag.adsbFi.jsonOk;
+  strlcpy(runtimeDiagnostics.adsbFiJsonError, networkDiag.adsbFi.jsonError,
+          sizeof(runtimeDiagnostics.adsbFiJsonError));
+  runtimeDiagnostics.adsbFiApiTotal = networkDiag.adsbFi.apiTotal;
+  runtimeDiagnostics.adsbFiApiAircraft = networkDiag.adsbFi.apiAircraft;
+  runtimeDiagnostics.adsbFiAcceptedAircraft = networkDiag.adsbFi.acceptedAircraft;
+  runtimeDiagnostics.adsbFiLastDurationMs = networkDiag.adsbFi.lastDurationMs;
+  runtimeDiagnostics.adsbFiLastAttemptMs = networkDiag.adsbFi.lastAttemptMs;
+  runtimeDiagnostics.adsbFiLastSuccessMs = networkDiag.adsbFi.lastSuccessMs;
+  strlcpy(runtimeDiagnostics.adsbFiStatus, networkDiag.adsbFi.status,
+          sizeof(runtimeDiagnostics.adsbFiStatus));
   runtimeDiagnostics.radarCacheReady = radar.animationCacheReady();
   runtimeDiagnostics.lightningReady = lightning.ready();
   runtimeDiagnostics.lightningStrikeCount = lightning.strikeCount();
+  runtimeDiagnostics.lightningLastFrameBytes = lightning.lastFrameBytes();
+  runtimeDiagnostics.lightningLargestFrameBytes = lightning.largestFrameBytes();
+  runtimeDiagnostics.lightningJsonMessages = lightning.jsonMessages();
+  runtimeDiagnostics.lightningJsonErrors = lightning.jsonErrors();
+  runtimeDiagnostics.lightningJsonControlMessages = lightning.jsonControlMessages();
+  runtimeDiagnostics.lightningLargeFramesSkipped = lightning.largeFramesSkipped();
+  runtimeDiagnostics.lightningWorkerRunning = lightning.workerRunning();
+  runtimeDiagnostics.lightningWorkerStackMinBytes = lightning.workerStackMinBytes();
+  runtimeDiagnostics.lightningTlsPaused = lightning.externalTlsPaused();
+  runtimeDiagnostics.lightningTlsPauseCount = lightning.externalTlsPauseCount();
+  runtimeDiagnostics.lightningStrokesReceived = lightning.strokesReceived();
+  runtimeDiagnostics.lightningStrokesAccepted = lightning.strokesAccepted();
+  runtimeDiagnostics.lightningStrokesOutsideMap = lightning.strokesOutsideMap();
+  runtimeDiagnostics.lightningStrokesDuplicates = lightning.strokesDuplicates();
+  runtimeDiagnostics.lightningStrokesInvalid = lightning.strokesInvalid();
+  runtimeDiagnostics.lightningDisconnectCount = lightning.disconnectCount();
   runtimeDiagnostics.currentWeatherValid = weatherData.current.valid;
   runtimeDiagnostics.weatherPressureHpa =
       weatherData.current.valid ? weatherData.current.pressureHpa : NAN;
@@ -899,7 +949,7 @@ void setup() {
   startupScreenActive = false;
   updateBacklightControl(millis());
 
-  if (networkWorker.begin(&radar)) {
+  if (networkWorker.begin(&radar, &lightning)) {
     applyDeviceSettings();
     networkWorker.setPaused(!deviceConfig.stationConnected());
     if (deviceConfig.stationConnected()) networkWorker.requestAll(true);
@@ -945,6 +995,9 @@ void loop() {
   // writes. WebServer still receives upload chunks because deviceConfig.loop()
   // runs first.
   if (deviceConfig.otaInProgress() || otaScreenActive) {
+    // Lightning now owns an independent WSS task; pause it explicitly during
+    // OTA so TLS traffic cannot compete with flash/upload handling.
+    lightning.loop(false);
     delay(1);
     return;
   }
@@ -1137,10 +1190,25 @@ void loop() {
     networkWorker.request(NetworkWorker::Job::AdsbInternet);
   }
 
-  if (networkConnected &&
-      due(now, lastRadarRequest, Config::RADAR_REFRESH_MS)) {
-    lastRadarRequest = now;
-    networkWorker.request(NetworkWorker::Job::Radar);
+  if (networkConnected) {
+    const time_t wallNow = time(nullptr);
+    if (wallNow >= 1700000000) {
+      if (radar.runtimeRefreshDue(wallNow)) {
+        // Each +30/+50/+70 s CHMI slot attempt is independent. Force only
+        // clears the Radar job backoff; serialization with other network jobs
+        // and duplicate/running-job protection remain intact. Mark the slot
+        // attempt consumed only after it was really queued.
+        if (networkWorker.request(NetworkWorker::Job::Radar, true)) {
+          lastRadarRequest = now;
+          radar.markRuntimeRefreshQueued(wallNow);
+        }
+      }
+    } else if (due(now, lastRadarRequest, Config::RADAR_REFRESH_MS)) {
+      // Short boot-time fallback before NTP synchronizes. Once wall time is
+      // valid, all automatic radar work follows exact CHMI five-minute slots.
+      lastRadarRequest = now;
+      networkWorker.request(NetworkWorker::Job::Radar);
+    }
   }
 
   if (networkConnected &&

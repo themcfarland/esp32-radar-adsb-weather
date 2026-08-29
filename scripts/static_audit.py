@@ -40,10 +40,11 @@ weather_cpp = read("src/weather_service.cpp")
 ui_h = read("src/ui.h")
 ui_cpp = read("src/ui.cpp")
 patch = read("scripts/patch_display_driver.py")
+ws_patch = read("scripts/patch_websockets_psram.py")
 readme = read("README.md")
 
-require("0.30.3-home-map-buttons" in version,
-        "firmware version is not v0.30.3-home-map-buttons")
+require("0.30.16-adsbfi-110nm" in version,
+        "firmware version is not v0.30.16-adsbfi-110nm")
 require("DEFAULT_HOME_LAT" in config and "DEFAULT_HOME_LON" in config and
         "home_lat" in device_cpp and "home_lon" in device_cpp and
         "settings_.homeLat" in device_cpp and "settings_.homeLon" in device_cpp,
@@ -56,8 +57,8 @@ require("fetchOpenMeteoCurrent" in weather_cpp and
         "Current weather: WU not configured, using Open-Meteo" in weather_cpp,
         "account-free Open-Meteo current weather fallback is missing")
 require("ADSB_FI_BASE_URL" in config and "opendata.adsb.fi/api" in config and
-        "ADSB_FI_RADIUS_NM = 180" in config and
-        "ADSB_FI_REFRESH_MS = 10UL * 1000UL" in config,
+        "ADSB_FI_RADIUS_NM = 110" in config and
+        "ADSB_FI_REFRESH_MS = 30UL * 1000UL" in config,
         "adsb.fi Czech-wide source configuration is missing")
 adsb_cpp = read("src/adsb_service.cpp")
 require("fetchAdsbFi" in adsb_cpp and "local + %s" in adsb_cpp and
@@ -97,7 +98,7 @@ require("serviceNetwork" in device_h and "WiFi async: starting reconnect cycle" 
         "deviceConfig.serviceNetwork()" in main and "ensureNetwork(4000)" not in main,
         "runtime Wi-Fi reconnect is still blocking")
 require("MAX_AIRCRAFT = 180" in config and "adsbFiCount" in models and
-        "mlatCount" in models and "ADS-B: local + adsb.fi/adsb.lol" in map_cpp,
+        "mlatCount" in models and "ADS-B: local + adsb.fi" in map_cpp,
         "expanded hybrid ADS-B model or map attribution is missing")
 require("showOtaScreen" in ui_cpp and "finishOtaScreen" in ui_cpp,
         "minimal OTA LCD screen is missing")
@@ -381,6 +382,13 @@ require("consumeMapTap" in main and "nextZoomMode" in main,
 require("links2004/WebSockets@2.7.2" in pio and
         "bblanchon/ArduinoJson@6.21.5" in pio,
         "WebSocket/ArduinoJson dependencies are missing")
+require("pre:scripts/patch_websockets_psram.py" in pio and
+        "WEBSOCKETS_MAX_DATA_SIZE=32768" not in pio and
+        "MAX_RX_KIB = 192" in ws_patch and
+        "MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT" in ws_patch and
+        "heap_caps_malloc" in ws_patch and
+        "LIGHTNINGMAPS_PSRAM_RX_PATCH" in ws_patch,
+        "large-frame WebSocket PSRAM patch is missing")
 require("class LightningService" in lightning_h and
         "WebSocketsClient" in lightning_h and
         "live2.lightningmaps.org" in lightning_cpp and
@@ -393,11 +401,25 @@ require("class LightningService" in lightning_h and
         "ws7.blitzortung.org" not in lightning_cpp,
         "LightningMaps WebSocket/plain-JSON receive path is incomplete")
 require("kMaxStrikes = 4096" in lightning_h and
+        "kJsonCapacity = 128U * 1024U" in lightning_h and
         "MALLOC_CAP_SPIRAM" in lightning_cpp and
         "uint32_t id = 0" in lightning_h and
         "addStrike" in lightning_cpp and
         "pruneOldStrikes" in lightning_cpp,
-        "LightningMaps PSRAM strike buffer is incomplete")
+        "LightningMaps PSRAM strike/JSON buffer is incomplete")
+require("WStype_FRAGMENT_TEXT_START" in lightning_cpp and
+        "WStype_FRAGMENT_FIN" in lightning_cpp and
+        "heap_caps_realloc" in lightning_cpp and
+        "fragmentBuffer_" in lightning_h,
+        "LightningMaps fragmented-frame PSRAM reassembly is missing")
+require("server hello cid" in lightning_cpp and
+        "lastFrameBytes" in lightning_h and
+        "largestFrameBytes" in lightning_h and
+        "Lightning RX:" in lightning_cpp and
+        "lightning_last_frame_bytes" in device_cpp and
+        "lightning_json_errors" in device_cpp and
+        "lightning_strokes_accepted" in device_cpp,
+        "LightningMaps large-frame diagnostics are incomplete")
 require('preferences.putBool("layer_lightning"' in device_cpp and
         'preferences.getBool("layer_lightning", true)' in device_cpp and
         "name='layer_lightning'" in device_cpp,
@@ -544,6 +566,14 @@ if errors:
         print(" -", error)
     sys.exit(1)
 
+
+require("pauseForExternalTls" in lightning_h and
+        "resumeAfterExternalTls" in lightning_h and
+        "ExternalTlsScope" in network_worker_cpp and
+        "SINGLE_TLS_LIGHTNING_YIELD_TIMEOUT_MS = 5000UL" in config and
+        "SINGLE_TLS_POST_YIELD_SETTLE_MS = 20UL" in config and
+        "networkWorker.begin(&radar, &lightning)" in main,
+        "single-TLS Lightning yield coordination is missing")
 print("STATIC AUDIT OK")
 print("Target: Waveshare ESP32-S3-Touch-LCD-7 800x480")
 print("Startup: animated status screen, progress and OK5TVR credit")
@@ -556,9 +586,11 @@ print("Zambretti: A-Z codes, season and optional weather wind correction")
 print("Diagnostics: barometer, Zambretti and lightning status exposed on web")
 print("Display: conservative 20-line buffer, no periodic DMA watchdog")
 print("Radar: runtime PNG update remains RAM-only")
-print("Lightning: LightningMaps plain-JSON WSS, viewport-filtered independent 20 min live overlay")
+print("Lightning: LightningMaps plain-JSON WSS, PSRAM large-frame RX, locally filtered 20 min live overlay")
 
-require("api.adsb.lol" in adsb_cpp, "adsb.lol fallback missing")
+require("api.adsb.lol" not in adsb_cpp and "adsb.lol" not in adsb_cpp and
+        "ADSB_LOL_BASE_URL" not in config,
+        "legacy ADS-B fallback is still present")
 require("WiFi.hostByName" in adsb_cpp, "ADS-B DNS diagnostic missing")
 require("HTTPClient::errorToString" in adsb_cpp, "ADS-B HTTP error text missing")
 print("OTA: browser firmware upload to dual OTA app partitions")

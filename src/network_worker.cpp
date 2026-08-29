@@ -6,6 +6,7 @@
 
 #include "config.h"
 #include "debug_log.h"
+#include "lightning_service.h"
 
 namespace {
 
@@ -37,6 +38,35 @@ bool deadlinePending(uint32_t now, uint32_t deadline) {
   return deadline != 0U && static_cast<int32_t>(deadline - now) > 0;
 }
 
+class ExternalTlsScope {
+ public:
+  explicit ExternalTlsScope(LightningService* lightning)
+      : lightning_(lightning) {
+    if (lightning_ &&
+        !lightning_->pauseForExternalTls(
+            Config::SINGLE_TLS_LIGHTNING_YIELD_TIMEOUT_MS)) {
+      lightning_->resumeAfterExternalTls();
+      return;
+    }
+    // WSS disconnect frees mbedTLS/lwIP allocations asynchronously. Give the
+    // allocator a short background-task window before the next handshake.
+    if (lightning_) {
+      vTaskDelay(pdMS_TO_TICKS(Config::SINGLE_TLS_POST_YIELD_SETTLE_MS));
+    }
+    ready_ = true;
+  }
+
+  ~ExternalTlsScope() {
+    if (ready_ && lightning_) lightning_->resumeAfterExternalTls();
+  }
+
+  bool ready() const { return ready_; }
+
+ private:
+  LightningService* lightning_ = nullptr;
+  bool ready_ = false;
+};
+
 }  // namespace
 
 NetworkWorker::NetworkWorker() = default;
@@ -54,9 +84,10 @@ NetworkWorker::~NetworkWorker() {
   if (resultMutex_) vSemaphoreDelete(resultMutex_);
 }
 
-bool NetworkWorker::begin(RadarService* radar) {
+bool NetworkWorker::begin(RadarService* radar, LightningService* lightning) {
   if (task_) return true;
   radar_ = radar;
+  lightning_ = lightning;
   if (!radar_) return false;
 
   stateMutex_ = xSemaphoreCreateMutex();
@@ -213,8 +244,8 @@ bool NetworkWorker::selectNextJob(Job& job) {
   // The remaining jobs are intentionally serialized so several TLS clients
   // never compete for internal heap / Wi-Fi buffers at the same time.
   static constexpr Job priority[] = {
-      Job::AdsbLocal, Job::WeatherCurrent, Job::AdsbInternet,
-      Job::Radar, Job::Forecast};
+      Job::AdsbLocal, Job::Radar, Job::WeatherCurrent,
+      Job::Forecast, Job::AdsbInternet};
   const uint32_t now = millis();
   for (Job candidate : priority) {
     const uint8_t index = static_cast<uint8_t>(candidate);
@@ -252,7 +283,7 @@ uint32_t NetworkWorker::failureBackoffMs(Job job, uint8_t failures) const {
       break;
     case Job::AdsbInternet:
       base = 30000UL;
-      maximum = 300000UL;
+      maximum = 120000UL;
       break;
     case Job::Radar:
       base = 60000UL;
@@ -283,6 +314,17 @@ bool NetworkWorker::execute(Job job, char* result, size_t resultSize,
   if (result && resultSize) result[0] = '\0';
   if (WiFi.status() != WL_CONNECTED) {
     snprintf(result, resultSize, "%s: Wi-Fi offline", jobName(job));
+    return false;
+  }
+
+  // All Internet-facing jobs are serialized already. Before one starts,
+  // temporarily release LightningMaps' persistent TLS session so the new
+  // mbedTLS handshake has a sufficiently large contiguous SRAM block.
+  const bool externalHttpsJob = job != Job::AdsbLocal;
+  ExternalTlsScope tlsScope(externalHttpsJob ? lightning_ : nullptr);
+  if (externalHttpsJob && !tlsScope.ready()) {
+    snprintf(result, resultSize, "%s: Lightning TLS yield timeout",
+             jobName(job));
     return false;
   }
 
@@ -409,6 +451,9 @@ void NetworkWorker::finishJob(Job job, bool success, bool changed,
   if (durationMs > diagnostics_.longestJobDurationMs)
     diagnostics_.longestJobDurationMs = durationMs;
   ++diagnostics_.completedJobs;
+  if (job == Job::AdsbInternet && internetAdsbWorker_) {
+    diagnostics_.adsbFi = internetAdsbWorker_->networkDiagnostics();
+  }
 
   if (success) {
     failures_[index] = 0;

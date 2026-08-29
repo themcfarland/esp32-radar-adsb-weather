@@ -12,7 +12,7 @@ Realtime vrstva používá WebSocket:
 wss://live2.lightningmaps.org/
 ```
 
-Po připojení firmware pošle viewport české mapy a přijímá plain JSON se seznamem `strokes`. Používají se především:
+Po připojení firmware pošle viewport české mapy a přijímá plain JSON se seznamem `strokes`. Server však může poslat i údery mimo požadovaný `p[]` rozsah a úvodní dávka může mít desítky kB. Proto se kompletní WebSocket RX payload přijímá do PSRAM a geografické omezení na českou mapu se provádí lokálně. Používají se především:
 
 ```text
 time, lat, lon, id
@@ -38,7 +38,7 @@ Lokální přijímač je volitelný a lze jej samostatně zapnout/vypnout ve web
 
 ## adsb.fi – ADS-B/MLAT
 
-Internetový provoz pro celou ČR se načítá z adsb.fi. Výřez je centrován přibližně na střed ČR s poloměrem 180 NM. Firmware parsuje jen údaje potřebné pro mapu a rozpoznává MLAT pozice.
+Internetový provoz pro celou ČR se načítá z adsb.fi. Výřez je centrován přibližně na střed ČR s poloměrem 110 NM. Firmware parsuje jen údaje potřebné pro mapu a rozpoznává MLAT pozice.
 
 Lokální `aircraft.json` má při duplicitním ICAO přednost. adsb.fi doplní provoz mimo dosah vlastní antény.
 

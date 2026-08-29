@@ -43,6 +43,8 @@ void sortNames(String names[], uint8_t count) {
   }
 }
 
+int64_t daysFromCivil(int year, unsigned month, unsigned day);
+
 String radarNameForUtc(time_t timestamp) {
   struct tm utc {};
   gmtime_r(&timestamp, &utc);
@@ -52,6 +54,37 @@ String radarNameForUtc(time_t timestamp) {
            utc.tm_year + 1900, utc.tm_mon + 1, utc.tm_mday, utc.tm_hour,
            utc.tm_min);
   return String(name);
+}
+
+time_t expectedRadarSlotUtc(time_t nowUtc) {
+  if (nowUtc < kValidEpoch) return 0;
+  const time_t delayed =
+      nowUtc - static_cast<time_t>(Config::RADAR_PUBLICATION_DELAY_SEC);
+  return (delayed / static_cast<time_t>(Config::RADAR_STEP_SECONDS)) *
+         static_cast<time_t>(Config::RADAR_STEP_SECONDS);
+}
+
+bool parseRadarNameUtc(const String& name, time_t& timestamp) {
+  timestamp = 0;
+  int year = 0, month = 0, day = 0, hour = 0, minute = 0;
+  if (sscanf(name.c_str(),
+             "pacz2gmaps3.z_max3d.%4d%2d%2d.%2d%2d.0.png",
+             &year, &month, &day, &hour, &minute) != 5) {
+    return false;
+  }
+  if (month < 1 || month > 12 || day < 1 || day > 31 ||
+      hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+    return false;
+  }
+  const int64_t seconds =
+      daysFromCivil(year, static_cast<unsigned>(month),
+                    static_cast<unsigned>(day)) *
+          86400LL +
+      static_cast<int64_t>(hour) * 3600LL +
+      static_cast<int64_t>(minute) * 60LL;
+  if (seconds <= 0) return false;
+  timestamp = static_cast<time_t>(seconds);
+  return true;
 }
 
 int64_t daysFromCivil(int year, unsigned month, unsigned day) {
@@ -595,16 +628,39 @@ RadarService::RuntimeFetchResult RadarService::fetchRuntimeUpdate(
     return RuntimeFetchResult::Failed;
   }
 
-  String latest[Config::RADAR_FRAME_COUNT];
-  uint8_t latestCount = 0;
-  if (!scanLatestFiles(latest, latestCount) || latestCount == 0) {
-    snprintf(status_, sizeof(status_), "Radar: index nedostupny, cache bezi");
-    return RuntimeFetchResult::Failed;
+  const time_t nowUtc = time(nullptr);
+  if (nowUtc < kValidEpoch) {
+    // This path is only expected briefly before NTP. Preserve the old robust
+    // behaviour so manual refresh/recovery can still work without wall time.
+    String latest[Config::RADAR_FRAME_COUNT];
+    uint8_t latestCount = 0;
+    if (!scanLatestFiles(latest, latestCount) || latestCount == 0) {
+      snprintf(status_, sizeof(status_), "Radar: NTP/index nedostupny");
+      return RuntimeFetchResult::Failed;
+    }
+    const String newestName = latest[latestCount - 1];
+    if (names_[availableFrames_ - 1] == newestName) {
+      snprintf(status_, sizeof(status_), "Radar: aktualni %u/%u",
+               static_cast<unsigned>(availableFrames_),
+               static_cast<unsigned>(Config::RADAR_FRAME_COUNT));
+      return RuntimeFetchResult::NoChange;
+    }
+    strlcpy(expectedRuntimeFrame_, newestName.c_str(),
+            sizeof(expectedRuntimeFrame_));
   }
 
-  const String newestName = latest[latestCount - 1];
+  const time_t expectedSlot = expectedRadarSlotUtc(nowUtc);
+  String newestName = expectedSlot > 0 ? radarNameForUtc(expectedSlot)
+                                       : String(expectedRuntimeFrame_);
+  if (newestName.isEmpty() || newestName == "--") {
+    snprintf(status_, sizeof(status_), "Radar: nelze urcit slot");
+    return RuntimeFetchResult::Failed;
+  }
+  strlcpy(expectedRuntimeFrame_, newestName.c_str(), sizeof(expectedRuntimeFrame_));
+
   if (names_[availableFrames_ - 1] == newestName) {
-    snprintf(status_, sizeof(status_), "Radar: aktualni %u/%u",
+    if (expectedSlot > 0) lastDirectSuccessSlotUtc_ = expectedSlot;
+    snprintf(status_, sizeof(status_), "Radar: aktualni %u/%u, prime URL",
              static_cast<unsigned>(availableFrames_),
              static_cast<unsigned>(Config::RADAR_FRAME_COUNT));
     return RuntimeFetchResult::NoChange;
@@ -613,11 +669,84 @@ RadarService::RuntimeFetchResult RadarService::fetchRuntimeUpdate(
   uint8_t* pngData = nullptr;
   size_t pngSize = 0;
   int code = 0;
-  const DownloadResult result =
-      downloadFileToMemory(newestName, pngData, pngSize, code);
+  ++directRequestCount_;
+  DownloadResult result = downloadFileToMemory(newestName, pngData, pngSize, code);
+  lastDirectHttpCode_ = code;
+  if (result == DownloadResult::kFailed && code < 0) {
+    ++directTransportFailureCount_;
+    Serial.printf("Radar direct transport error %d (%s) for %s\n", code,
+                  HTTPClient::errorToString(code).c_str(), newestName.c_str());
+  }
+
+  if (result == DownloadResult::kNotFound) {
+    ++directNotFoundCount_;
+    // A 404 shortly after a five-minute boundary is normal publication lag.
+    // Do not mark the NetworkWorker job failed; that would activate its 60 s
+    // failure backoff and suppress our +40/+60 s retries.
+    bool fallbackAttempted = false;
+    time_t cachedNewestUtc = 0;
+    const bool cachedTimeOk =
+        parseRadarNameUtc(names_[availableFrames_ - 1], cachedNewestUtc);
+    const time_t staleThreshold = static_cast<time_t>(
+        Config::RADAR_INDEX_FALLBACK_MISSED_SLOTS * Config::RADAR_STEP_SECONDS);
+    const bool staleEnough = expectedSlot > 0 && cachedTimeOk &&
+        expectedSlot - cachedNewestUtc >= staleThreshold;
+    const bool fallbackCooldownOk = lastIndexFallbackUtc_ == 0 ||
+        nowUtc - lastIndexFallbackUtc_ >=
+            static_cast<time_t>(Config::RADAR_INDEX_FALLBACK_COOLDOWN_SEC);
+
+    if (staleEnough && fallbackCooldownOk) {
+      fallbackAttempted = true;
+      lastIndexFallbackUtc_ = nowUtc;
+      ++indexFallbackCount_;
+      String latest[Config::RADAR_FRAME_COUNT];
+      uint8_t latestCount = 0;
+      Serial.printf("Radar: direct 404 for %s, stale cache -> one index fallback\n",
+                    newestName.c_str());
+      if (scanLatestFiles(latest, latestCount) && latestCount > 0) {
+        const String indexNewest = latest[latestCount - 1];
+        if (indexNewest != names_[availableFrames_ - 1]) {
+          newestName = indexNewest;
+          // Keep expectedRuntimeFrame_ on the scheduled target; the fallback
+          // may deliberately recover only an older intermediate CHMI frame.
+          code = 0;
+          ++directRequestCount_;
+          result = downloadFileToMemory(newestName, pngData, pngSize, code);
+          lastDirectHttpCode_ = code;
+          if (result == DownloadResult::kFailed && code < 0) {
+            ++directTransportFailureCount_;
+            Serial.printf("Radar fallback transport error %d (%s) for %s\n",
+                          code, HTTPClient::errorToString(code).c_str(),
+                          newestName.c_str());
+          }
+        } else {
+          snprintf(status_, sizeof(status_),
+                   "Radar: CHMI zpozdeni, index bez zmeny");
+          return RuntimeFetchResult::NoChange;
+        }
+      }
+    }
+
+    if (result == DownloadResult::kNotFound) {
+      snprintf(status_, sizeof(status_),
+               fallbackAttempted ? "Radar: cekam na CHMI, fallback 404"
+                                 : "Radar: cekam na novy 5min snimek");
+      return RuntimeFetchResult::NoChange;
+    }
+  }
+
   if (result != DownloadResult::kOk) {
-    snprintf(status_, sizeof(status_), "Radar worker HTTP %d", code);
+    snprintf(status_, sizeof(status_), "Radar direct HTTP %d", code);
+    if (pngData) heap_caps_free(pngData);
     return RuntimeFetchResult::Failed;
+  }
+
+  ++directSuccessCount_;
+  time_t downloadedSlot = 0;
+  if (parseRadarNameUtc(newestName, downloadedSlot)) {
+    lastDirectSuccessSlotUtc_ = downloadedSlot;
+  } else if (expectedSlot > 0) {
+    lastDirectSuccessSlotUtc_ = expectedSlot;
   }
 
   const size_t overlayBytes = static_cast<size_t>(cacheWidth_) * cacheHeight_;
@@ -651,9 +780,85 @@ RadarService::RuntimeFetchResult RadarService::fetchRuntimeUpdate(
   pending.sourceWidth = decodedSourceWidth;
   pending.sourceHeight = decodedSourceHeight;
   strlcpy(pending.name, newestName.c_str(), sizeof(pending.name));
-  snprintf(status_, sizeof(status_), "Radar: worker pripravil %s",
+  snprintf(status_, sizeof(status_), "Radar: prime URL pripravil %s",
            newestName.c_str());
   return RuntimeFetchResult::Ready;
+}
+
+bool RadarService::runtimeRefreshDue(time_t nowUtc) {
+  if (nowUtc < kValidEpoch) return false;
+
+  const time_t step = static_cast<time_t>(Config::RADAR_STEP_SECONDS);
+  const time_t slot = (nowUtc / step) * step;
+  const uint32_t secInSlot = static_cast<uint32_t>(nowUtc - slot);
+
+  // Once this exact CHMI slot has been downloaded there is nothing to retry.
+  if (lastDirectSuccessSlotUtc_ == slot) return false;
+
+  int8_t attempt = -1;
+  for (uint8_t i = 0; i < Config::RADAR_SLOT_ATTEMPTS; ++i) {
+    const uint32_t threshold = Config::RADAR_PUBLICATION_DELAY_SEC +
+                               i * Config::RADAR_RETRY_STEP_SEC;
+    const uint32_t nextThreshold = threshold + Config::RADAR_RETRY_STEP_SEC;
+    if (secInSlot >= threshold && secInSlot < nextThreshold) {
+      attempt = static_cast<int8_t>(i);
+      break;
+    }
+  }
+  if (attempt < 0) return false;
+
+  const int64_t token =
+      static_cast<int64_t>(slot / step) * Config::RADAR_SLOT_ATTEMPTS + attempt;
+  if (token == lastScheduledAttemptToken_) return false;
+
+  const String expected = radarNameForUtc(slot);
+  strlcpy(expectedRuntimeFrame_, expected.c_str(), sizeof(expectedRuntimeFrame_));
+  Serial.printf("Radar scheduler: slot %s attempt %d/%u at +%u s\n",
+                expected.c_str(), static_cast<int>(attempt + 1),
+                static_cast<unsigned>(Config::RADAR_SLOT_ATTEMPTS),
+                static_cast<unsigned>(secInSlot));
+  return true;
+}
+
+void RadarService::markRuntimeRefreshQueued(time_t nowUtc) {
+  if (nowUtc < kValidEpoch) return;
+  const time_t step = static_cast<time_t>(Config::RADAR_STEP_SECONDS);
+  const time_t slot = (nowUtc / step) * step;
+  const uint32_t secInSlot = static_cast<uint32_t>(nowUtc - slot);
+
+  int8_t attempt = -1;
+  for (uint8_t i = 0; i < Config::RADAR_SLOT_ATTEMPTS; ++i) {
+    const uint32_t threshold = Config::RADAR_PUBLICATION_DELAY_SEC +
+                               i * Config::RADAR_RETRY_STEP_SEC;
+    const uint32_t nextThreshold = threshold + Config::RADAR_RETRY_STEP_SEC;
+    if (secInSlot >= threshold && secInSlot < nextThreshold) {
+      attempt = static_cast<int8_t>(i);
+      break;
+    }
+  }
+  if (attempt < 0) return;
+  lastScheduledAttemptToken_ =
+      static_cast<int64_t>(slot / step) * Config::RADAR_SLOT_ATTEMPTS + attempt;
+}
+
+uint32_t RadarService::secondsUntilNextRuntimeRefresh(time_t nowUtc) const {
+  if (nowUtc < kValidEpoch) return UINT32_MAX;
+  const time_t step = static_cast<time_t>(Config::RADAR_STEP_SECONDS);
+  const time_t slot = (nowUtc / step) * step;
+  const uint32_t secInSlot = static_cast<uint32_t>(nowUtc - slot);
+
+  if (lastDirectSuccessSlotUtc_ == slot) {
+    return static_cast<uint32_t>(step - secInSlot) +
+           Config::RADAR_PUBLICATION_DELAY_SEC;
+  }
+
+  for (uint8_t i = 0; i < Config::RADAR_SLOT_ATTEMPTS; ++i) {
+    const uint32_t threshold = Config::RADAR_PUBLICATION_DELAY_SEC +
+                               i * Config::RADAR_RETRY_STEP_SEC;
+    if (secInSlot < threshold) return threshold - secInSlot;
+  }
+  return static_cast<uint32_t>(step - secInSlot) +
+         Config::RADAR_PUBLICATION_DELAY_SEC;
 }
 
 bool RadarService::applyRuntimeUpdate(RuntimeFrameUpdate& pending) {
@@ -1045,31 +1250,7 @@ const char* RadarService::frameName(uint8_t index) const {
 bool RadarService::frameTimeUtc(uint8_t index, time_t& timestamp) const {
   timestamp = 0;
   if (index >= availableFrames_) return false;
-
-  int year = 0;
-  int month = 0;
-  int day = 0;
-  int hour = 0;
-  int minute = 0;
-  if (sscanf(names_[index].c_str(),
-             "pacz2gmaps3.z_max3d.%4d%2d%2d.%2d%2d.0.png",
-             &year, &month, &day, &hour, &minute) != 5) {
-    return false;
-  }
-
-  if (month < 1 || month > 12 || day < 1 || day > 31 || hour < 0 ||
-      hour > 23 || minute < 0 || minute > 59) {
-    return false;
-  }
-  const int64_t seconds =
-      daysFromCivil(year, static_cast<unsigned>(month),
-                    static_cast<unsigned>(day)) *
-          86400LL +
-      static_cast<int64_t>(hour) * 3600LL +
-      static_cast<int64_t>(minute) * 60LL;
-  if (seconds <= 0) return false;
-  timestamp = static_cast<time_t>(seconds);
-  return true;
+  return parseRadarNameUtc(names_[index], timestamp);
 }
 
 void* RadarService::pngOpen(const char* filename, int32_t* size) {

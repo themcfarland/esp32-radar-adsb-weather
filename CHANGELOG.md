@@ -1,3 +1,86 @@
+# 0.30.16-adsbfi-110nm
+
+- Polomer doplnkoveho internetoveho ADSB.fi dotazu snizen z 180 NM na 110 NM.
+- Lokalni ADS-B prijimac, 30s interval ADSB.fi, chunked HTTP oprava, radar, Lightning a TLS-yield zustavaji beze zmeny.
+- Mensi oblast snizuje velikost ADSB.fi JSON odpovedi, dobu HTTPS prenosu a zatizeni PSRAM.
+
+# 0.30.15-adsbfi-chunked-fix
+
+- Opraveno cteni ADSB.fi odpovedi s `Transfer-Encoding: chunked` a bez `Content-Length`.
+- Surove cteni `HTTPClient::getStreamPtr()` je nahrazeno `HTTPClient::writeToStream()`, ktery dekoduje jednotlive HTTP chunky a korektne skonci na nulovem chunku.
+- Dekodovane telo se zapisuje primo do PSRAM pres vlastni `PsramBodyStream`; limit 1 MB zustava zachovan.
+- Odstranen falesny `body no-data timeout`, ktery nastaval po prijeti cele odpovedi, kdy Cloudflare ponechal TCP/TLS spojeni otevrene.
+- ADSB.fi diagnostika z 0.30.14 zustava zachovana. Radar, Lightning worker, single-TLS yield, 30s radar scheduler a 2h forecast jsou beze zmeny.
+
+# 0.30.14-adsbfi-diagnostics
+
+- ADSB.fi ma vlastni per-provider diagnostiku, kterou neprepise lokalni ADS-B job.
+- `/api/diagnostics` pridava DNS/IP, HTTP kod/chybu, Content-Length, body bytes/chybu, JSON stav, API pocty letadel a delku/vek posledniho pokusu.
+- Webova diagnostika zobrazuje stejna ADSB.fi pole.
+- Maximalni backoff ADSB.fi je snizen na 120 s; interval dotazu zustava 30 s.
+- Radar, Lightning worker, single-TLS yield a 2h forecast zustavaji beze zmeny.
+
+# 0.30.13-adsbfi-only
+
+- Externi ADS-B zdroj je nyni vyhradne `opendata.adsb.fi` API v3.
+- Odstranen alternativni provider a jeho fallback, konfigurace, mapovy popisek a testovaci zavislosti.
+- Lokalni ADS-B prijimac zustava primarni rychly zdroj; adsb.fi ho doplnuje pro celou mapu.
+- Zachovan radar +30/+50/+70 s scheduler, single-TLS yield, Lightning worker a 2h forecast.
+
+# 0.30.12-radar-30s
+
+- Persistent LightningMaps WSS now yields its TLS session before every serialized external HTTPS job (CHMI radar, weather, forecast and adsb.fi), then reconnects immediately afterwards.
+- Added a 20 ms post-yield settle window so lwIP/mbedTLS can return contiguous internal SRAM before the next handshake.
+- Internet adsb.fi refresh interval increased from 10 s to 30 s to avoid unnecessary WSS reconnect churn while local ADS-B remains the primary realtime feed.
+- Network priority is now local ADS-B -> radar -> current weather -> forecast -> internet ADS-B.
+- Added diagnostics `lightning_tls_paused` and `lightning_tls_pause_count`.
+- CHMI 5-minute slot scheduler, +20/+40/+60 retry, 2 h forecast, strongest-AP selection and Lightning large-frame parser are retained.
+
+# 0.30.10-radar-slot-retry
+
+- CHMI MAX_Z_masked remains on the correct `pacz2gmaps3.z_max3d.*` product.
+- Scheduled +20/+40/+60 s radar attempts now bypass only a previous Radar-job backoff, so one transient HTTP/TLS failure cannot suppress the rest of the five-minute slot retries.
+- A radar attempt is marked consumed only after NetworkWorker really accepts it into the queue; a busy worker no longer silently loses the retry.
+- Added radar transport-failure count and last HTTP code diagnostics.
+- Open-Meteo forecast refresh interval is 2 hours; current weather remains 5 minutes and the first forecast after boot is immediate.
+- Keeps Lightning worker isolation and strongest-AP Wi-Fi selection.
+
+# 0.30.8-chmi-slot-scheduler
+
+- Runtime CHMI radar polling is synchronized to exact five-minute UTC slots instead of a five-minute interval measured from ESP32 boot.
+- Direct PNG requests run at +20, +40 and +60 seconds after each slot; after a successful fetch the remaining retries are suppressed.
+- Expected HTTP 404 publication lag no longer counts as a NetworkWorker failure/backoff.
+- Directory-index scans are removed from normal runtime updates and are used only when the cached frame is at least three slots stale, with a 30-minute fallback cooldown.
+- Added radar scheduling diagnostics: expected frame, seconds to next fetch, direct GET/OK/404 counters and index-fallback count.
+- Keeps v0.30.7 Lightning worker isolation and strongest-AP Wi-Fi selection.
+
+
+- LightningMaps WebSocket/TLS receiver moved out of Arduino `loop()` into a dedicated low-priority FreeRTOS task on core 1.
+- Prevents a slow/large `live2` WebSocket payload from blocking the local web server, UI updates and consumption of local ADS-B snapshots.
+- Large history frames above 32 KiB are drained by the WSS worker but intentionally not deserialized; realtime smaller frames continue normally.
+- Strike buffer access is protected by a mutex because Lightning RX and map rendering now run concurrently.
+- Lightning worker is explicitly paused during OTA.
+- Diagnostics add worker state, minimum free worker stack and skipped-large-frame count.
+
+## 0.30.6-lightning-json-diagnostics
+
+- Opraven příjem velkých LightningMaps `live2` WebSocket rámců. Reálný browser test ukázal úvodní dávku ~52,8 kB / ~500 úderů, tedy výrazně nad limitem knihovny.
+- `arduinoWebSockets 2.7.2` má na ESP32 vlastní natvrdo definovaný `WEBSOCKETS_MAX_DATA_SIZE` 15 kB; dřívější command-line define 32 kB byl přepsán hlavičkou knihovny.
+- Nový PlatformIO pre-build patch nastavuje RX limit 192 kB a velké WebSocket payloady alokuje v OPI PSRAM, s fallbackem na původní heap.
+- LightningMaps ArduinoJson filtrovaný DOM zvětšen z 24 kB na 128 kB v PSRAM pro velké batch zprávy.
+- Přidána podpora WebSocket fragmentů s reassembly bufferem v PSRAM.
+- Server hello (`cid/con/port/time/k`) je nyní rozpoznán jako validní kontrolní zpráva a nepočítá se jako JSON chyba.
+- Firmware již nepředpokládá server-side filtrování `p[]`; vzdálené evropské údery se zahazují až lokálně podle mapového viewportu.
+- Do Serial a `/diagnostics` přidána velikost posledního/max RX rámce, počet JSON zpráv/chyb, RX/přijaté údery a počet WSS odpojení.
+- Zachován výběr nejsilnějšího BSSID pro AP se stejným SSID z verze 0.30.4.
+
+## 0.30.4-strongest-ap
+
+- Wi-Fi při připojení aktivně skenuje dostupné AP a u stejného SSID vybírá BSSID s nejsilnějším RSSI.
+- Připojení používá nalezený kanál a BSSID, takže mesh / více AP se stejným SSID nepreferuje náhodně slabší uzel.
+- Runtime reconnect používá asynchronní scan, aby neblokoval LVGL/UI; při chybě scanu zůstává původní automatická asociace jako fallback.
+- Diagnostický log při připojení uvádí zvolenou BSSID a RSSI.
+
 ## 0.30.3-home-map-buttons
 
 - Webove nastaveni rozsahu mapy kolem HOME je nyni reseno ctyrmi tlacitky: Cela CR / 50 km / 25 km / 10 km.
@@ -85,7 +168,7 @@
 - Fixed `adsb.fi JSON: IncompleteInput` after a valid HTTP 200 response by downloading the complete JSON body into PSRAM before ArduinoJson parsing.
 - The downloader verifies the declared Content-Length and reports received-byte progress/truncation/timeouts in Serial.
 - ADS-B network fetching no longer runs on the 91% startup screen; startup loads only local ADS-B and the first adsb.fi request runs after the dashboard is active.
-- Existing local + adsb.fi/adsb.lol merge, MLAT support, LightningMaps and OTA are unchanged.
+- Existing local + adsb.fi merge, MLAT support, LightningMaps and OTA are unchanged.
 
 # 0.28.18-adsbfi-netfix
 
@@ -94,7 +177,7 @@
 - Dve velke ADS-B cache (`local` a sitova) presunuty do PSRAM; verejny slouceny snapshot zustava v interni pameti pro rychle kresleni.
 - Pred HTTPS dotazem se kontroluje DNS a do Serialu se vypisuje free/largest internal heap, PSRAM a rozresena IP.
 - HTTP chyby nyni obsahuji text `HTTPClient::errorToString`, takze `-1` uz neni anonymni.
-- Pokud adsb.fi selze, automaticky se zkusi kompatibilni fallback `api.adsb.lol/v2/lat/.../lon/.../dist/...`; adsb.fi zustava primarni zdroj.
+- Externi ADS-B pouziva adsb.fi Open Data.
 - Sitovy dotaz zpomalen na 10 s a cache prodlouzena na 30 s, aby se omezily soubezne TLS handshaky s LightningMaps WSS.
 
 # 0.28.17-adsbfi-robust

@@ -55,7 +55,8 @@ constexpr uint32_t LIGHTNING_TRAIL_YELLOW_MAX_AGE_SEC = 5UL * 60UL;
 constexpr uint32_t LIGHTNING_TRAIL_ORANGE_MAX_AGE_SEC = 10UL * 60UL;
 constexpr uint32_t LIGHTNING_TRAIL_RED_MAX_AGE_SEC = 20UL * 60UL;
 constexpr uint32_t LIGHTNING_REDRAW_MS = 30UL * 1000UL;
-// live2.lightningmaps.org sends viewport-filtered JSON batches. Heartbeat checks
+// live2.lightningmaps.org may send large European JSON batches even when p[]
+// requests the Czech viewport. Local filtering therefore remains mandatory. Heartbeat checks
 // the WSS transport; these longer guards reconnect the same endpoint if the
 // socket remains open but valid JSON envelopes stop arriving.
 constexpr uint32_t LIGHTNING_FIRST_DATA_TIMEOUT_MS = 60UL * 1000UL;
@@ -70,23 +71,41 @@ constexpr uint32_t LIGHTNING_ALERT_MAX_AGE_SEC = 10UL * 60UL;
 
 constexpr uint32_t ADSB_REFRESH_MS = 2000;
 // Hybrid ADS-B: keep the fast local receiver and supplement the whole Czech
-// map with adsb.fi Open Data. The public API allows up to 250 NM; 180 NM from
-// the map centre covers the full configured Czech viewport with margin.
+// map with adsb.fi Open Data. The public API allows up to 250 NM; this build
+// intentionally limits the supplementary internet feed to 110 NM to reduce
+// response size, PSRAM pressure and HTTPS transfer time.
 constexpr char ADSB_FI_BASE_URL[] = "https://opendata.adsb.fi/api";
-constexpr char ADSB_LOL_BASE_URL[] = "https://api.adsb.lol";
 constexpr float ADSB_FI_CENTER_LAT = 49.80f;
 constexpr float ADSB_FI_CENTER_LON = 15.35f;
-constexpr uint16_t ADSB_FI_RADIUS_NM = 180;
-constexpr uint32_t ADSB_FI_REFRESH_MS = 10UL * 1000UL;
+constexpr uint16_t ADSB_FI_RADIUS_NM = 110;
+constexpr uint32_t ADSB_FI_REFRESH_MS = 30UL * 1000UL;
 constexpr uint32_t ADSB_LOCAL_CACHE_MAX_AGE_MS = 10UL * 1000UL;
 constexpr uint8_t ADSB_LOCAL_BACKOFF_AFTER_FAILURES = 3;
 constexpr uint32_t ADSB_LOCAL_FAILURE_BACKOFF_MS = 30UL * 1000UL;
 constexpr uint32_t ADSB_FI_CACHE_MAX_AGE_MS = 30UL * 1000UL;
-constexpr uint32_t RADAR_REFRESH_MS = 5UL * 60UL * 1000UL;
+// CHMI publishes radar frames on exact five-minute UTC slots. Runtime polling
+// starts shortly after each slot and retries twice without re-reading the
+// directory index. HTTP 404 during this window means "not published yet", not
+// a network failure. The index is reserved for stale-cache recovery.
+constexpr uint32_t RADAR_REFRESH_MS = 5UL * 60UL * 1000UL;  // NTP fallback only
+constexpr uint32_t RADAR_PUBLICATION_DELAY_SEC = 30UL;
+constexpr uint32_t RADAR_RETRY_STEP_SEC = 20UL;
+constexpr uint8_t RADAR_SLOT_ATTEMPTS = 3;  // +30, +50, +70 s
+constexpr uint8_t RADAR_INDEX_FALLBACK_MISSED_SLOTS = 3;
+constexpr uint32_t RADAR_INDEX_FALLBACK_COOLDOWN_SEC = 30UL * 60UL;
 constexpr uint32_t RADAR_ANIMATION_MS = 1400;
-// Personal-station observations refresh every 5 min; the 48 h hourly forecast hourly.
+// Personal-station observations refresh every 5 min; the hourly forecast is
+// refreshed every 2 h. A fresh forecast is still requested immediately after boot.
 constexpr uint32_t CURRENT_WEATHER_REFRESH_MS = 5UL * 60UL * 1000UL;
-constexpr uint32_t FORECAST_REFRESH_MS = 60UL * 60UL * 1000UL;
+constexpr uint32_t FORECAST_REFRESH_MS = 2UL * 60UL * 60UL * 1000UL;
+
+// LightningMaps owns a long-lived WSS/TLS session. On this ESP32-S3 the
+// remaining contiguous internal SRAM can be too small for a second mbedTLS
+// handshake even though total free heap still looks healthy. External HTTPS
+// jobs therefore ask Lightning to release WSS temporarily, wait for lwIP/
+// mbedTLS buffers to return, execute one serialized request, then reconnect.
+constexpr uint32_t SINGLE_TLS_LIGHTNING_YIELD_TIMEOUT_MS = 5000UL;
+constexpr uint32_t SINGLE_TLS_POST_YIELD_SETTLE_MS = 20UL;
 constexpr uint32_t ASTRONOMY_REFRESH_MS = 60UL * 1000UL;
 constexpr uint32_t BAROMETER_REFRESH_MS = 60UL * 1000UL;
 constexpr uint32_t PRESSURE_HISTORY_STEP_MS = 5UL * 60UL * 1000UL;

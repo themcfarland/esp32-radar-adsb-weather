@@ -6,6 +6,28 @@
 
 class AdsbService {
  public:
+  struct NetworkDiagnostics {
+    uint32_t attempts = 0;
+    uint32_t successes = 0;
+    uint32_t failures = 0;
+    bool dnsOk = false;
+    char resolvedIp[20] = "--";
+    int httpCode = 0;
+    char httpError[64] = "--";
+    int contentLength = -1;
+    size_t bodyBytes = 0;
+    char bodyError[64] = "--";
+    bool jsonOk = false;
+    char jsonError[64] = "--";
+    size_t apiTotal = 0;
+    size_t apiAircraft = 0;
+    size_t acceptedAircraft = 0;
+    uint32_t lastDurationMs = 0;
+    uint32_t lastAttemptMs = 0;
+    uint32_t lastSuccessMs = 0;
+    char status[96] = "adsb.fi: waiting";
+  };
+
   explicit AdsbService(const char* aircraftUrl);
   ~AdsbService();
 
@@ -44,6 +66,9 @@ class AdsbService {
     return localEnabled_ ? lastLocalSuccessMs_ : 0U;
   }
   uint32_t lastNetworkSuccessMs() const { return lastAdsbFiSuccessMs_; }
+  const NetworkDiagnostics& networkDiagnostics() const {
+    return networkDiagnostics_;
+  }
 
   // Network-worker integration. Background tasks fetch into private worker
   // instances; the main task then imports only the completed snapshot and
@@ -72,4 +97,5 @@ class AdsbService {
   uint32_t lastAdsbFiAttemptMs_ = 0;
   char adsbFiStatus_[96] = "adsb.fi: waiting";
   char networkSource_[16] = "adsb.fi";
+  NetworkDiagnostics networkDiagnostics_;
 };

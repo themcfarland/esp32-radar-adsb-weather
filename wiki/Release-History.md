@@ -1,3 +1,30 @@
+## 0.30.10-radar-slot-retry
+
+- Forecast data refresh every 2 hours instead of every hour.
+- Current weather keeps its 5-minute refresh.
+- First forecast fetch after boot remains immediate.
+
+## 0.30.8-chmi-slot-scheduler
+
+- LightningMaps WSS/TLS přesunut z hlavní Arduino smyčky do samostatného low-priority FreeRTOS workeru na core 1.
+- Velký nebo pomalu doručovaný WebSocket frame již nemůže zablokovat lokální web ani předávání výsledků NetworkWorkeru (včetně lokálního ADS-B).
+- Úvodní historické WSS rámce nad 32 KiB se přijmou do PSRAM, ale záměrně se neparsují; realtime menší dávky pokračují.
+- Sdílený buffer blesků je chráněn mutexem pro bezpečný souběh RX workeru a kreslení mapy.
+- Worker se během OTA explicitně pozastaví.
+- Diagnostika: stav Lightning workeru, minimum volného stacku a počet přeskočených velkých rámců.
+
+## 0.30.6-lightning-json-diagnostics
+
+- Rozšířená diagnostika LightningMaps: control/JSON chyby, mimo-mapové, duplicitní a neplatné údery.
+- Zachována PSRAM oprava velkých WSS frame z 0.30.5.
+
+## 0.30.4-strongest-ap
+
+- aktivní výběr nejsilnějšího AP podle RSSI, pokud více AP vysílá stejné SSID,
+- připojení je směrováno na konkrétní BSSID a kanál,
+- asynchronní scan také při runtime reconnectu,
+- fallback na standardní Wi-Fi asociaci při neúspěšném scanu.
+
 ## 0.30.3-home-map-buttons
 
 - tlacitka Cela CR / 50 / 25 / 10 km ve webu

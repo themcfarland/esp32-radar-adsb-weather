@@ -143,4 +143,6 @@ class DeviceConfigService {
   int8_t asyncReconnectProfile_ = -1;
   uint32_t asyncReconnectAttemptStartedMs_ = 0;
   uint32_t asyncReconnectNextCycleMs_ = 0;
+  bool asyncWifiScanPending_ = false;
+  bool asyncWifiScanReady_ = false;
 };

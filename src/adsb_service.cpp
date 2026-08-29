@@ -37,82 +37,99 @@ struct PsramHttpBody {
   }
 };
 
+class PsramBodyStream : public Stream {
+ public:
+  PsramBodyStream(PsramHttpBody& body, size_t capacity)
+      : body_(body), capacity_(capacity) {}
+
+  size_t write(uint8_t value) override {
+    return write(&value, 1U);
+  }
+
+  size_t write(const uint8_t* buffer, size_t size) override {
+    if (!buffer || size == 0U) return 0U;
+    const size_t remaining = capacity_ > body_.size ? capacity_ - body_.size : 0U;
+    const size_t accepted = size < remaining ? size : remaining;
+    if (accepted > 0U) {
+      memcpy(body_.data + body_.size, buffer, accepted);
+      body_.size += accepted;
+    }
+    if (accepted != size) overflowed_ = true;
+    return accepted;
+  }
+
+  int available() override { return 0; }
+  int read() override { return -1; }
+  int peek() override { return -1; }
+  void flush() override {}
+
+  bool overflowed() const { return overflowed_; }
+
+ private:
+  PsramHttpBody& body_;
+  size_t capacity_ = 0U;
+  bool overflowed_ = false;
+};
+
 bool downloadJsonBody(HTTPClient& http, const char* providerLabel,
-                      int contentLength, PsramHttpBody& body) {
+                      int contentLength, PsramHttpBody& body,
+                      char* errorText = nullptr, size_t errorTextSize = 0) {
+  auto setError = [&](const char* text) {
+    if (errorText && errorTextSize) strlcpy(errorText, text, errorTextSize);
+  };
+  setError("--");
   constexpr size_t kUnknownBodyCapacity = 1024U * 1024U;
   constexpr size_t kMaximumBodyBytes = 1024U * 1024U;
-  constexpr uint32_t kNoDataTimeoutMs = 12000UL;
-  constexpr uint32_t kTotalTimeoutMs = 30000UL;
 
   const bool knownLength = contentLength >= 0;
   const size_t expected = knownLength ? static_cast<size_t>(contentLength) : 0U;
   if (knownLength && expected > kMaximumBodyBytes) {
     DebugLog::printf("%s: body too large: %u B\n", providerLabel,
                      static_cast<unsigned>(expected));
+    setError("body too large");
     return false;
   }
 
-  const size_t capacity = knownLength ? expected + 1U : kUnknownBodyCapacity + 1U;
+  const size_t payloadCapacity = knownLength ? expected : kUnknownBodyCapacity;
+  const size_t capacity = payloadCapacity + 1U;
   if (!body.allocate(capacity)) {
     DebugLog::printf("%s: PSRAM body allocation failed: %u B, free=%u largest=%u\n",
                      providerLabel, static_cast<unsigned>(capacity),
                      static_cast<unsigned>(ESP.getFreePsram()),
                      static_cast<unsigned>(heap_caps_get_largest_free_block(
                          MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)));
+    setError("PSRAM allocation failed");
     return false;
   }
 
-  WiFiClient* stream = http.getStreamPtr();
   const uint32_t startedMs = millis();
-  uint32_t lastDataMs = startedMs;
-  uint32_t nextProgress = 64U * 1024U;
+  PsramBodyStream sink(body, payloadCapacity);
 
-  while (true) {
-    if (knownLength && body.size >= expected) break;
-    if (!knownLength && body.size >= kUnknownBodyCapacity) {
-      DebugLog::printf("%s: body exceeded %u B limit\n", providerLabel,
-                       static_cast<unsigned>(kUnknownBodyCapacity));
-      return false;
+  // HTTPClient::writeToStream() understands Transfer-Encoding: chunked and
+  // stops on the terminating zero-sized chunk. Reading getStreamPtr() directly
+  // does not decode chunk framing and can wait forever for a socket close on
+  // Cloudflare-backed APIs such as adsb.fi.
+  const int written = http.writeToStream(&sink);
+  if (written < 0) {
+    const String detail = HTTPClient::errorToString(written);
+    DebugLog::printf("%s: body stream error %d (%s), got %u B\n",
+                     providerLabel, written, detail.c_str(),
+                     static_cast<unsigned>(body.size));
+    if (sink.overflowed()) {
+      setError("body exceeded 1 MB limit");
+    } else if (detail.length() > 0) {
+      setError(detail.c_str());
+    } else {
+      setError("body stream error");
     }
+    return false;
+  }
 
-    const int available = stream->available();
-    if (available > 0) {
-      size_t wanted = static_cast<size_t>(available);
-      if (wanted > 4096U) wanted = 4096U;
-      const size_t remaining = capacity - 1U - body.size;
-      if (wanted > remaining) wanted = remaining;
-      if (wanted == 0U) return false;
-
-      const int received = stream->read(body.data + body.size, wanted);
-      if (received > 0) {
-        body.size += static_cast<size_t>(received);
-        lastDataMs = millis();
-        if (body.size >= nextProgress) {
-          DebugLog::printf("%s: received %u%s\n", providerLabel,
-                           static_cast<unsigned>(body.size),
-                           knownLength ? " B" : " B (unknown length)");
-          nextProgress += 64U * 1024U;
-        }
-        delay(0);
-        continue;
-      }
-    }
-
-    const uint32_t now = millis();
-    if (!http.connected() && stream->available() <= 0) break;
-    if (static_cast<uint32_t>(now - lastDataMs) > kNoDataTimeoutMs) {
-      DebugLog::printf("%s: body timeout after %u/%u B\n", providerLabel,
-                       static_cast<unsigned>(body.size),
-                       static_cast<unsigned>(expected));
-      return false;
-    }
-    if (static_cast<uint32_t>(now - startedMs) > kTotalTimeoutMs) {
-      DebugLog::printf("%s: body total timeout after %u/%u B\n", providerLabel,
-                       static_cast<unsigned>(body.size),
-                       static_cast<unsigned>(expected));
-      return false;
-    }
-    delay(2);
+  if (sink.overflowed() || body.size > payloadCapacity) {
+    DebugLog::printf("%s: body exceeded %u B limit\n", providerLabel,
+                     static_cast<unsigned>(payloadCapacity));
+    setError("body exceeded 1 MB limit");
+    return false;
   }
 
   body.data[body.size] = '\0';
@@ -120,12 +137,21 @@ bool downloadJsonBody(HTTPClient& http, const char* providerLabel,
     DebugLog::printf("%s: truncated HTTP body: got %u / %u B\n", providerLabel,
                      static_cast<unsigned>(body.size),
                      static_cast<unsigned>(expected));
+    setError("truncated HTTP body");
     return false;
   }
 
-  DebugLog::printf("%s: body complete %u B in %u ms\n", providerLabel,
+  if (written >= 0 && static_cast<size_t>(written) != body.size) {
+    DebugLog::printf("%s: stream size mismatch: writer=%d body=%u\n",
+                     providerLabel, written, static_cast<unsigned>(body.size));
+    setError("stream size mismatch");
+    return false;
+  }
+
+  DebugLog::printf("%s: body complete %u B in %u ms%s\n", providerLabel,
                    static_cast<unsigned>(body.size),
-                   static_cast<unsigned>(millis() - startedMs));
+                   static_cast<unsigned>(millis() - startedMs),
+                   knownLength ? "" : " (decoded stream)");
   return body.size > 0U;
 }
 
@@ -379,11 +405,7 @@ void AdsbService::applyNetworkSnapshot(const AircraftSnapshot& source) {
   adsbFiCache_->valid = source.valid;
   if (source.valid) lastAdsbFiSuccessMs_ = millis();
 
-  if (strstr(source.endpoint, "adsb.lol")) {
-    strlcpy(networkSource_, "adsb.lol", sizeof(networkSource_));
-  } else {
-    strlcpy(networkSource_, "adsb.fi", sizeof(networkSource_));
-  }
+  strlcpy(networkSource_, "adsb.fi", sizeof(networkSource_));
   if (source.status[0]) {
     strlcpy(adsbFiStatus_, source.status, sizeof(adsbFiStatus_));
   }
@@ -520,6 +542,31 @@ bool AdsbService::fetchNetworkProvider(AircraftSnapshot& target,
                                        const char* providerLabel,
                                        const char* host,
                                        const char* url) {
+  const uint32_t startedMs = millis();
+  NetworkDiagnostics& diag = networkDiagnostics_;
+  ++diag.attempts;
+  diag.lastAttemptMs = startedMs;
+  diag.dnsOk = false;
+  strlcpy(diag.resolvedIp, "--", sizeof(diag.resolvedIp));
+  diag.httpCode = 0;
+  strlcpy(diag.httpError, "--", sizeof(diag.httpError));
+  diag.contentLength = -1;
+  diag.bodyBytes = 0;
+  strlcpy(diag.bodyError, "--", sizeof(diag.bodyError));
+  diag.jsonOk = false;
+  strlcpy(diag.jsonError, "--", sizeof(diag.jsonError));
+  diag.apiTotal = 0;
+  diag.apiAircraft = 0;
+  diag.acceptedAircraft = 0;
+  snprintf(diag.status, sizeof(diag.status), "%s: connecting", providerLabel);
+
+  auto finishFailure = [&]() -> bool {
+    ++diag.failures;
+    diag.lastDurationMs = millis() - startedMs;
+    strlcpy(diag.status, adsbFiStatus_, sizeof(diag.status));
+    return false;
+  };
+
   const uint32_t heapFree = ESP.getFreeHeap();
   const uint32_t heapLargest = static_cast<uint32_t>(
       heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
@@ -529,12 +576,15 @@ bool AdsbService::fetchNetworkProvider(AircraftSnapshot& target,
   const int dnsOk = WiFi.hostByName(host, resolved);
   if (dnsOk != 1) {
     snprintf(adsbFiStatus_, sizeof(adsbFiStatus_), "%s DNS chyba", providerLabel);
+    strlcpy(diag.httpError, "DNS resolution failed", sizeof(diag.httpError));
     DebugLog::printf("%s: DNS failed | heap=%u largest=%u psram=%u\n",
                      providerLabel, static_cast<unsigned>(heapFree),
                      static_cast<unsigned>(heapLargest),
                      static_cast<unsigned>(psramFree));
-    return false;
+    return finishFailure();
   }
+  diag.dnsOk = true;
+  strlcpy(diag.resolvedIp, resolved.toString().c_str(), sizeof(diag.resolvedIp));
 
   DebugLog::printf(
       "%s GET: %s | DNS %s | heap=%u largest=%u psram=%u\n",
@@ -554,19 +604,23 @@ bool AdsbService::fetchNetworkProvider(AircraftSnapshot& target,
   if (!http.begin(client, url)) {
     snprintf(adsbFiStatus_, sizeof(adsbFiStatus_), "%s http.begin chyba",
              providerLabel);
+    strlcpy(diag.httpError, "http.begin failed", sizeof(diag.httpError));
     DebugLog::println(adsbFiStatus_);
-    return false;
+    return finishFailure();
   }
 
-  http.addHeader("User-Agent", "ESP32-Radar-ADSB/0.28.20");
+  http.addHeader("User-Agent", "ESP32-Radar-ADSB/0.30.16");
   http.addHeader("Accept", "application/json");
   http.addHeader("Accept-Encoding", "identity");
   http.addHeader("Connection", "close");
 
   const int code = http.GET();
   const int contentLength = http.getSize();
+  diag.httpCode = code;
+  diag.contentLength = contentLength;
   if (code != HTTP_CODE_OK) {
     const String errorText = HTTPClient::errorToString(code);
+    strlcpy(diag.httpError, errorText.c_str(), sizeof(diag.httpError));
     snprintf(adsbFiStatus_, sizeof(adsbFiStatus_), "%s HTTP %d %.42s",
              providerLabel, code, errorText.c_str());
     DebugLog::printf(
@@ -583,23 +637,25 @@ bool AdsbService::fetchNetworkProvider(AircraftSnapshot& target,
       DebugLog::printf("%s error body: %s\n", providerLabel, detail.c_str());
     }
     http.end();
-    return false;
+    return finishFailure();
   }
+  strlcpy(diag.httpError, "OK", sizeof(diag.httpError));
 
   DebugLog::printf("%s: HTTP 200, length=%d\n", providerLabel, contentLength);
 
-  // Do not deserialize directly from WiFiClientSecure. On this target the TLS
-  // stream can temporarily report no bytes while the response is still in
-  // flight; ArduinoJson then reports IncompleteInput even though HTTP 200 and
-  // Content-Length are valid. Buffer the complete body in PSRAM first and only
-  // parse after all declared bytes arrived.
   PsramHttpBody body;
-  if (!downloadJsonBody(http, providerLabel, contentLength, body)) {
-    snprintf(adsbFiStatus_, sizeof(adsbFiStatus_), "%s body incomplete",
-             providerLabel);
+  char bodyError[64] = "--";
+  if (!downloadJsonBody(http, providerLabel, contentLength, body,
+                        bodyError, sizeof(bodyError))) {
+    diag.bodyBytes = body.size;
+    strlcpy(diag.bodyError, bodyError, sizeof(diag.bodyError));
+    snprintf(adsbFiStatus_, sizeof(adsbFiStatus_), "%s body: %.48s",
+             providerLabel, bodyError);
     http.end();
-    return false;
+    return finishFailure();
   }
+  diag.bodyBytes = body.size;
+  strlcpy(diag.bodyError, "OK", sizeof(diag.bodyError));
   http.end();
 
   StaticJsonDocument<1280> filter;
@@ -613,13 +669,16 @@ bool AdsbService::fetchNetworkProvider(AircraftSnapshot& target,
       doc, reinterpret_cast<char*>(body.data), body.size,
       DeserializationOption::Filter(filter));
   if (err) {
+    strlcpy(diag.jsonError, err.c_str(), sizeof(diag.jsonError));
     snprintf(adsbFiStatus_, sizeof(adsbFiStatus_), "%s JSON: %s",
              providerLabel, err.c_str());
     DebugLog::printf("%s JSON: %s | body=%u B psram free=%u\n", providerLabel,
                      err.c_str(), static_cast<unsigned>(body.size),
                      static_cast<unsigned>(ESP.getFreePsram()));
-    return false;
+    return finishFailure();
   }
+  diag.jsonOk = true;
+  strlcpy(diag.jsonError, "OK", sizeof(diag.jsonError));
 
   const size_t apiTotal = doc["total"] | static_cast<size_t>(0);
   const char* apiMessage = doc["msg"] | "";
@@ -629,11 +688,19 @@ bool AdsbService::fetchNetworkProvider(AircraftSnapshot& target,
   parseAircraftArray(doc.as<JsonVariantConst>(), "ac", false, providerLabel,
                      target, &stats);
 
+  diag.apiTotal = apiTotal;
+  diag.apiAircraft = apiArraySize;
+  diag.acceptedAircraft = target.count;
   strlcpy(networkSource_, providerLabel, sizeof(networkSource_));
   snprintf(adsbFiStatus_, sizeof(adsbFiStatus_), "%s OK: %u/%u v mape",
            providerLabel, static_cast<unsigned>(target.count),
            static_cast<unsigned>(apiArraySize));
   snprintf(target.status, sizeof(target.status), "%s", adsbFiStatus_);
+
+  ++diag.successes;
+  diag.lastSuccessMs = millis();
+  diag.lastDurationMs = diag.lastSuccessMs - startedMs;
+  strlcpy(diag.status, adsbFiStatus_, sizeof(diag.status));
 
   DebugLog::printf(
       "%s: total=%u ac=%u accepted=%u missing=%u outside=%u stale=%u msg=%s\n",
@@ -654,22 +721,8 @@ bool AdsbService::fetchAdsbFi(AircraftSnapshot& target) {
            Config::ADSB_FI_CENTER_LON,
            static_cast<unsigned>(Config::ADSB_FI_RADIUS_NM));
 
-  if (fetchNetworkProvider(target, "adsb.fi", "opendata.adsb.fi", primaryUrl)) {
-    return true;
-  }
-
-  // adsb.lol exposes the same readsb/ADSBExchange-compatible aircraft fields.
-  // It is used only as a fallback when adsb.fi cannot establish/parse a
-  // request, so the normal source remains adsb.fi and request load stays low.
-  resetSnapshot(target);
-  delay(25);
-  char fallbackUrl[192];
-  snprintf(fallbackUrl, sizeof(fallbackUrl),
-           "%s/v2/lat/%.4f/lon/%.4f/dist/%u",
-           Config::ADSB_LOL_BASE_URL, Config::ADSB_FI_CENTER_LAT,
-           Config::ADSB_FI_CENTER_LON,
-           static_cast<unsigned>(Config::ADSB_FI_RADIUS_NM));
-  return fetchNetworkProvider(target, "adsb.lol", "api.adsb.lol", fallbackUrl);
+  return fetchNetworkProvider(target, "adsb.fi", "opendata.adsb.fi",
+                              primaryUrl);
 }
 
 void AdsbService::mergeCaches(uint32_t nowMs) {

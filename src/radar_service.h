@@ -33,6 +33,20 @@ class RadarService {
   bool applyRuntimeUpdate(RuntimeFrameUpdate& pending);
   static void discardRuntimeUpdate(RuntimeFrameUpdate& pending);
 
+  // Runtime CHMI scheduler. With valid NTP it queues exactly three lightweight
+  // opportunities per five-minute slot (+30/+50/+70 s). Once a slot succeeds,
+  // remaining retries are suppressed.
+  bool runtimeRefreshDue(time_t nowUtc);
+  void markRuntimeRefreshQueued(time_t nowUtc);
+  uint32_t secondsUntilNextRuntimeRefresh(time_t nowUtc) const;
+  const char* expectedRuntimeFrame() const { return expectedRuntimeFrame_; }
+  uint32_t directRequestCount() const { return directRequestCount_; }
+  uint32_t directSuccessCount() const { return directSuccessCount_; }
+  uint32_t directNotFoundCount() const { return directNotFoundCount_; }
+  uint32_t directTransportFailureCount() const { return directTransportFailureCount_; }
+  int lastDirectHttpCode() const { return lastDirectHttpCode_; }
+  uint32_t indexFallbackCount() const { return indexFallbackCount_; }
+
   // Call after the RGB panel and compact animation cache are ready. Runtime
   // radar refreshes will then stay entirely in RAM/PSRAM and will not write
   // PNG files to LittleFS while the LCD DMA is active.
@@ -127,6 +141,18 @@ class RadarService {
   bool displayActive_ = false;
   String names_[Config::RADAR_FRAME_COUNT];
   char status_[112] = "Radar: cekam";
+
+  // Five-minute runtime scheduling / recovery diagnostics. Epoch values are UTC.
+  int64_t lastScheduledAttemptToken_ = -1;
+  time_t lastDirectSuccessSlotUtc_ = 0;
+  time_t lastIndexFallbackUtc_ = 0;
+  char expectedRuntimeFrame_[40] = "--";
+  uint32_t directRequestCount_ = 0;
+  uint32_t directSuccessCount_ = 0;
+  uint32_t directNotFoundCount_ = 0;
+  uint32_t directTransportFailureCount_ = 0;
+  int lastDirectHttpCode_ = 0;
+  uint32_t indexFallbackCount_ = 0;
 
   static RadarService* active_;
   static File activeFile_;

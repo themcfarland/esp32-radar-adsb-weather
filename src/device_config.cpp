@@ -18,6 +18,59 @@
 namespace {
 constexpr char kPreferencesNamespace[] = "devicecfg";
 
+
+struct WifiApCandidate {
+  bool found = false;
+  int32_t rssi = -127;
+  uint8_t channel = 0;
+  uint8_t bssid[6] = {0, 0, 0, 0, 0, 0};
+};
+
+bool strongestScannedApForSsid(const String& ssid, WifiApCandidate& candidate) {
+  const int scanCount = WiFi.scanComplete();
+  if (scanCount < 0) return false;
+
+  candidate = WifiApCandidate{};
+  for (int i = 0; i < scanCount; ++i) {
+    if (WiFi.SSID(i) != ssid) continue;
+
+    const int32_t rssi = WiFi.RSSI(i);
+    if (candidate.found && rssi <= candidate.rssi) continue;
+
+    const uint8_t* bssid = WiFi.BSSID(i);
+    if (!bssid) continue;
+
+    candidate.found = true;
+    candidate.rssi = rssi;
+    candidate.channel = static_cast<uint8_t>(WiFi.channel(i));
+    memcpy(candidate.bssid, bssid, sizeof(candidate.bssid));
+  }
+  return candidate.found;
+}
+
+String bssidToString(const uint8_t bssid[6]) {
+  char text[18];
+  snprintf(text, sizeof(text), "%02X:%02X:%02X:%02X:%02X:%02X",
+           bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5]);
+  return String(text);
+}
+
+void beginWifiProfile(const WifiProfile& profile, const WifiApCandidate* ap,
+                      const char* logPrefix) {
+  if (ap && ap->found) {
+    DebugLog::printf(
+        "%s: strongest AP for '%s' is %s, ch %u, RSSI %ld dBm\n",
+        logPrefix, profile.ssid.c_str(), bssidToString(ap->bssid).c_str(),
+        static_cast<unsigned>(ap->channel), static_cast<long>(ap->rssi));
+    WiFi.begin(profile.ssid.c_str(), profile.password.c_str(), ap->channel,
+               ap->bssid, true);
+  } else {
+    DebugLog::printf("%s: no scan candidate for '%s', using normal association\n",
+                     logPrefix, profile.ssid.c_str());
+    WiFi.begin(profile.ssid.c_str(), profile.password.c_str());
+  }
+}
+
 bool usableDefault(const char* value) {
   if (!value || !value[0]) return false;
   return strstr(value, "YOUR_") == nullptr &&
@@ -328,6 +381,18 @@ bool DeviceConfigService::connectStation(uint32_t timeoutMs) {
   WiFi.mode(mode);
   WiFi.setSleep(false);
 
+  // Scan once before trying saved profiles. For networks where multiple APs
+  // advertise the same SSID, explicitly associate with the strongest BSSID.
+  // If scanning fails, the normal WiFi.begin() behavior remains as fallback.
+  WiFi.scanDelete();
+  const int scanCount = WiFi.scanNetworks(false, true);
+  if (scanCount >= 0) {
+    DebugLog::printf("WiFi: scan found %d APs\n", scanCount);
+  } else {
+    DebugLog::printf("WiFi: scan failed (%d), using normal association\n",
+                     scanCount);
+  }
+
   const uint32_t started = millis();
   size_t visited = 0;
   size_t index = nextWifiProfileIndex_ % WIFI_PROFILE_COUNT;
@@ -352,7 +417,13 @@ bool DeviceConfigService::connectStation(uint32_t timeoutMs) {
                      static_cast<unsigned>(profileIndex + 1U),
                      static_cast<unsigned>(WIFI_PROFILE_COUNT),
                      profile.ssid.c_str());
-    WiFi.begin(profile.ssid.c_str(), profile.password.c_str());
+
+    WifiApCandidate candidate;
+    const WifiApCandidate* candidatePtr = nullptr;
+    if (scanCount >= 0 && strongestScannedApForSsid(profile.ssid, candidate)) {
+      candidatePtr = &candidate;
+    }
+    beginWifiProfile(profile, candidatePtr, "WiFi");
 
     const uint32_t attemptStarted = millis();
     while (!stationConnected() && millis() - attemptStarted < attemptMs) {
@@ -365,6 +436,7 @@ bool DeviceConfigService::connectStation(uint32_t timeoutMs) {
     }
 
     if (stationConnected()) {
+      WiFi.scanDelete();
       activeWifiProfile_ = static_cast<int8_t>(profileIndex);
       // Prefer the last successful profile first on the next reconnect.
       nextWifiProfileIndex_ = profileIndex;
@@ -372,8 +444,9 @@ bool DeviceConfigService::connectStation(uint32_t timeoutMs) {
       startMdns();
       configTzTime(Config::TZ_INFO, "pool.ntp.org", "time.cloudflare.com");
       DebugLog::printf(
-          "WiFi: connected using profile %u '%s', IP %s, config %s\n",
+          "WiFi: connected using profile %u '%s', BSSID %s, RSSI %ld dBm, IP %s, config %s\n",
           static_cast<unsigned>(profileIndex + 1U), profile.ssid.c_str(),
+          WiFi.BSSIDstr().c_str(), static_cast<long>(WiFi.RSSI()),
           WiFi.localIP().toString().c_str(), accessUrl().c_str());
       return true;
     }
@@ -385,6 +458,7 @@ bool DeviceConfigService::connectStation(uint32_t timeoutMs) {
     nextWifiProfileIndex_ = index;
   }
 
+  WiFi.scanDelete();
   activeWifiProfile_ = -1;
   return false;
 }
@@ -405,7 +479,8 @@ void DeviceConfigService::serviceNetwork() {
   const uint32_t now = millis();
 
   if (stationConnected()) {
-    if (asyncReconnectActive_ || asyncReconnectProfile_ >= 0) {
+    if (asyncReconnectActive_ || asyncReconnectProfile_ >= 0 ||
+        asyncWifiScanPending_ || asyncWifiScanReady_) {
       const int8_t connectedProfile = asyncReconnectProfile_;
       if (connectedProfile >= 0) {
         activeWifiProfile_ = connectedProfile;
@@ -415,12 +490,16 @@ void DeviceConfigService::serviceNetwork() {
       asyncReconnectProfile_ = -1;
       asyncReconnectVisited_ = 0;
       asyncReconnectNextCycleMs_ = 0;
+      asyncWifiScanPending_ = false;
+      asyncWifiScanReady_ = false;
+      WiFi.scanDelete();
       if (portalActive_) stopAccessPoint();
       startMdns();
       configTzTime(Config::TZ_INFO, "pool.ntp.org", "time.cloudflare.com");
-      DebugLog::printf("WiFi async: connected profile %d, IP %s\n",
-                       static_cast<int>(activeWifiProfile_ + 1),
-                       WiFi.localIP().toString().c_str());
+      DebugLog::printf(
+          "WiFi async: connected profile %d, BSSID %s, RSSI %ld dBm, IP %s\n",
+          static_cast<int>(activeWifiProfile_ + 1), WiFi.BSSIDstr().c_str(),
+          static_cast<long>(WiFi.RSSI()), WiFi.localIP().toString().c_str());
     }
     return;
   }
@@ -428,6 +507,9 @@ void DeviceConfigService::serviceNetwork() {
   if (!hasEnabledWifiProfile()) {
     asyncReconnectActive_ = false;
     asyncReconnectProfile_ = -1;
+    asyncWifiScanPending_ = false;
+    asyncWifiScanReady_ = false;
+    WiFi.scanDelete();
     if (!portalActive_) startAccessPoint("no Wi-Fi profile is enabled");
     return;
   }
@@ -443,7 +525,40 @@ void DeviceConfigService::serviceNetwork() {
     asyncReconnectVisited_ = 0;
     asyncReconnectIndex_ = nextWifiProfileIndex_ % WIFI_PROFILE_COUNT;
     asyncReconnectProfile_ = -1;
-    DebugLog::println("WiFi async: starting reconnect cycle");
+    asyncWifiScanPending_ = false;
+    asyncWifiScanReady_ = false;
+    WiFi.scanDelete();
+
+    const int scanStart = WiFi.scanNetworks(true, true);
+    if (scanStart == -1) {
+      asyncWifiScanPending_ = true;
+      DebugLog::println(
+          "WiFi async: starting reconnect cycle and background AP scan");
+    } else if (scanStart >= 0) {
+      asyncWifiScanReady_ = true;
+      DebugLog::printf(
+          "WiFi async: reconnect scan completed immediately, %d APs\n",
+          scanStart);
+    } else {
+      DebugLog::printf(
+          "WiFi async: AP scan could not start (%d), using normal association\n",
+          scanStart);
+    }
+  }
+
+  if (asyncWifiScanPending_) {
+    const int scanCount = WiFi.scanComplete();
+    if (scanCount == -1) return;
+
+    asyncWifiScanPending_ = false;
+    asyncWifiScanReady_ = scanCount >= 0;
+    if (asyncWifiScanReady_) {
+      DebugLog::printf("WiFi async: scan found %d APs\n", scanCount);
+    } else {
+      DebugLog::printf(
+          "WiFi async: scan failed (%d), using normal association\n",
+          scanCount);
+    }
   }
 
   if (asyncReconnectProfile_ >= 0) {
@@ -473,7 +588,14 @@ void DeviceConfigService::serviceNetwork() {
                      static_cast<unsigned>(profileIndex + 1U),
                      static_cast<unsigned>(WIFI_PROFILE_COUNT),
                      profile.ssid.c_str());
-    WiFi.begin(profile.ssid.c_str(), profile.password.c_str());
+
+    WifiApCandidate candidate;
+    const WifiApCandidate* candidatePtr = nullptr;
+    if (asyncWifiScanReady_ &&
+        strongestScannedApForSsid(profile.ssid, candidate)) {
+      candidatePtr = &candidate;
+    }
+    beginWifiProfile(profile, candidatePtr, "WiFi async");
     asyncReconnectProfile_ = static_cast<int8_t>(profileIndex);
     asyncReconnectAttemptStartedMs_ = now;
     return;
@@ -486,6 +608,9 @@ void DeviceConfigService::serviceNetwork() {
   activeWifiProfile_ = -1;
   nextWifiProfileIndex_ = asyncReconnectIndex_;
   asyncReconnectNextCycleMs_ = now + Config::WIFI_RETRY_MS;
+  asyncWifiScanPending_ = false;
+  asyncWifiScanReady_ = false;
+  WiFi.scanDelete();
   if (!portalActive_) {
     startAccessPoint("runtime async Wi-Fi reconnect failed for saved profiles");
   }
@@ -988,10 +1113,10 @@ String DeviceConfigService::buildDiagnosticsPage() const {
   page += F("<section class='card'><h2>Sit</h2><table><tr><td>Rezim</td><td id='network_mode'>--</td></tr><tr><td>SSID</td><td id='ssid' class='value'>--</td></tr><tr><td>IP adresa</td><td id='ip' class='value'>--</td></tr><tr><td>Signal</td><td id='rssi'>--</td></tr><tr><td>Hostname</td><td id='hostname' class='value'>--</td></tr><tr><td>Konfiguracni AP</td><td id='portal'>--</td></tr></table></section>");
   page += F("<section class='card'><h2>Sitovy worker</h2><table><tr><td>Stav</td><td id='net_worker_state'>--</td></tr><tr><td>Aktivni uloha</td><td id='net_worker_job' class='value'>--</td></tr><tr><td>Fronta</td><td id='net_worker_pending'>--</td></tr><tr><td>Posledni uloha</td><td id='net_worker_last' class='value'>--</td></tr><tr><td>Posledni / nejdelsi</td><td id='net_worker_duration'>--</td></tr><tr><td>OK / chyby / backoff</td><td id='net_worker_counts'>--</td></tr></table></section>");
   page += F("<section class='card'><h2>Displej a mapa</h2><table><tr><td>Rozliseni</td><td>800 x 480</td></tr><tr><td>Podsviceni</td><td id='backlight_state'>--</td></tr><tr><td>Tydenni plan</td><td id='backlight_schedule'>--</td></tr><tr><td>Docasne probuzeni</td><td id='backlight_wake'>--</td></tr><tr><td>Vyrez mapy</td><td id='map_view'>--</td></tr><tr><td>Prekresleni mapy</td><td id='map_redraws'>--</td></tr><tr><td>Posledni kresleni</td><td id='map_duration'>--</td></tr><tr><td>Srovnani RGB DMA</td><td id='lcd_resyncs'>--</td></tr><tr><td>Od posledniho srovnani</td><td id='lcd_age'>--</td></tr><tr><td>Auto srovnani po zatezi</td><td id='lcd_load_guard'>--</td></tr><tr><td>Nejdelsi blokace loop</td><td id='longest_loop'>--</td></tr></table></section>");
-  page += F("<section class='card wide'><h2>Datove zdroje</h2><table><tr><td>Radar</td><td id='radar_status' class='value'>--</td></tr><tr><td>Radarove snimky</td><td id='radar_frames'>--</td></tr><tr><td>Stari aktualizace radaru</td><td id='radar_age'>--</td></tr><tr><td>Blesky LightningMaps</td><td id='lightning_status' class='value'>--</td></tr><tr><td>Blesky v bufferu</td><td id='lightning_strikes'>--</td></tr><tr><td>Stari aktualizace blesku</td><td id='lightning_age'>--</td></tr><tr><td>ADS-B</td><td id='adsb_status' class='value'>--</td></tr><tr><td>Pocet letounu</td><td id='aircraft_count'>--</td></tr><tr><td>Lokalni / sit / MLAT</td><td id='aircraft_sources'>--</td></tr><tr><td>Stari ADS-B dat</td><td id='adsb_age'>--</td></tr><tr><td>Aktualni pocasi</td><td id='weather_status' class='value'>--</td></tr><tr><td>Stari pocasi</td><td id='weather_age'>--</td></tr><tr><td>Predpoved</td><td id='forecast_status' class='value'>--</td></tr><tr><td>Stari predpovedi</td><td id='forecast_age'>--</td></tr><tr><td>Astronomie</td><td id='astronomy_status' class='value'>--</td></tr><tr><td>Stari astronomie</td><td id='astronomy_age'>--</td></tr></table></section>");
+  page += F("<section class='card wide'><h2>Datove zdroje</h2><table><tr><td>Radar</td><td id='radar_status' class='value'>--</td></tr><tr><td>Radarove snimky</td><td id='radar_frames'>--</td></tr><tr><td>Stari aktualizace radaru</td><td id='radar_age'>--</td></tr><tr><td>Ocekavany CHMI snimek</td><td id='radar_expected'>--</td></tr><tr><td>Dalsi prime nacteni</td><td id='radar_next'>--</td></tr><tr><td>Prime GET / OK / 404</td><td id='radar_direct'>--</td></tr><tr><td>Transport chyby / posledni HTTP</td><td id='radar_transport'>--</td></tr><tr><td>Index fallback</td><td id='radar_fallback'>--</td></tr><tr><td>Blesky LightningMaps</td><td id='lightning_status' class='value'>--</td></tr><tr><td>Blesky v bufferu</td><td id='lightning_strikes'>--</td></tr><tr><td>WSS RX ramec posledni / max</td><td id='lightning_frames'>--</td></tr><tr><td>JSON zpravy / control / chyby</td><td id='lightning_json'>--</td></tr><tr><td>WSS worker / stack min</td><td id='lightning_worker'>--</td></tr><tr><td>Velke ramce preskocene</td><td id='lightning_skipped'>--</td></tr><tr><td>Udery RX / mapa / mimo</td><td id='lightning_strokes_rx'>--</td></tr><tr><td>Udery duplicity / neplatne</td><td id='lightning_strokes_drop'>--</td></tr><tr><td>WSS odpojeni</td><td id='lightning_disconnects'>--</td></tr><tr><td>Stari aktualizace blesku</td><td id='lightning_age'>--</td></tr><tr><td>ADS-B</td><td id='adsb_status' class='value'>--</td></tr><tr><td>Pocet letounu</td><td id='aircraft_count'>--</td></tr><tr><td>Lokalni / sit / MLAT</td><td id='aircraft_sources'>--</td></tr><tr><td>adsb.fi stav</td><td id='adsbfi_diag_status' class='value'>--</td></tr><tr><td>adsb.fi pokusy / OK / chyby</td><td id='adsbfi_counts'>--</td></tr><tr><td>adsb.fi DNS</td><td id='adsbfi_dns' class='value'>--</td></tr><tr><td>adsb.fi HTTP</td><td id='adsbfi_http' class='value'>--</td></tr><tr><td>adsb.fi body</td><td id='adsbfi_body' class='value'>--</td></tr><tr><td>adsb.fi JSON / letadla</td><td id='adsbfi_json' class='value'>--</td></tr><tr><td>adsb.fi posledni pokus</td><td id='adsbfi_timing'>--</td></tr><tr><td>Stari ADS-B dat</td><td id='adsb_age'>--</td></tr><tr><td>Aktualni pocasi</td><td id='weather_status' class='value'>--</td></tr><tr><td>Stari pocasi</td><td id='weather_age'>--</td></tr><tr><td>Predpoved</td><td id='forecast_status' class='value'>--</td></tr><tr><td>Stari predpovedi</td><td id='forecast_age'>--</td></tr><tr><td>Astronomie</td><td id='astronomy_status' class='value'>--</td></tr><tr><td>Stari astronomie</td><td id='astronomy_age'>--</td></tr></table></section>");
   page += F("<section class='card wide'><h2>Barometr a Zambretti</h2><table><tr><td>Povoleno</td><td id='barometer_enabled'>--</td></tr><tr><td>Senzor</td><td id='barometer_sensor' class='value'>--</td></tr><tr><td>Stav</td><td id='barometer_status' class='value'>--</td></tr><tr><td>Nastavena vyska / korekce</td><td id='barometer_calibration'>--</td></tr><tr><td>Referencni tlak pocasi</td><td id='weather_pressure'>--</td></tr><tr><td>Tlak u hladiny more</td><td id='barometer_pressure'>--</td></tr><tr><td>Tlak senzoru</td><td id='barometer_raw_pressure'>--</td></tr><tr><td>Teplota senzoru</td><td id='barometer_temperature'>--</td></tr><tr><td>Teplota pro prepocet</td><td id='barometer_reduction_temperature'>--</td></tr><tr><td>Zdroj teploty</td><td id='barometer_reduction_source'>--</td></tr><tr><td>Venkovni prumer / vzorky</td><td id='wu_temperature_average'>--</td></tr><tr><td>Stari posledni venkovni teploty</td><td id='wu_temperature_age'>--</td></tr><tr><td>Zmena za 3 h</td><td id='barometer_delta'>--</td></tr><tr><td>Trend tlaku</td><td id='barometer_trend'>--</td></tr><tr><td>Zambretti kod</td><td id='zambretti_code'>--</td></tr><tr><td>Zambretti trend</td><td id='zambretti_trend'>--</td></tr><tr><td>Zambretti predpoved</td><td id='barometer_forecast'>--</td></tr><tr><td>Korekce vetrem</td><td id='zambretti_wind'>--</td></tr><tr><td>Sezonni korekce</td><td id='zambretti_season'>--</td></tr><tr><td>Body historie</td><td id='barometer_history'>--</td></tr><tr><td>Stari mereni</td><td id='barometer_age'>--</td></tr></table></section>");
   page += F("<section class='card wide'><h2>Nastaveni zobrazeni</h2><table><tr><td>Vrstvy</td><td id='layers'>--</td></tr><tr><td>Zvyrazneni letounu</td><td id='alerts'>--</td></tr></table></section></div><p id='refresh_state' class='muted'>Nacitam...</p>");
-  page += F("<script>const $=id=>document.getElementById(id);const kb=v=>Math.round(v/1024)+' kB';const age=v=>v<0?'dosud neprovedeno':v<1000?v+' ms':v<60000?Math.round(v/1000)+' s':v<3600000?Math.round(v/60000)+' min':(v/3600000).toFixed(1)+' h';const up=v=>{let s=Math.floor(v/1000),d=Math.floor(s/86400);s%=86400;let h=Math.floor(s/3600);s%=3600;let m=Math.floor(s/60);return (d?d+' d ':'')+h+' h '+m+' min'};const yes=(v,a='ano',n='ne')=>v?'<span class=ok>'+a+'</span>':'<span class=warn>'+n+'</span>';async function loadData(){try{const r=await fetch('/api/diagnostics',{cache:'no-store'});if(!r.ok)throw Error(r.status);const d=await r.json();$('firmware').textContent=d.firmware;$('local_datetime').textContent=d.local_date+' '+d.local_time;$('timezone').textContent=d.timezone+' (automaticky CET/CEST)';$('time_sync').innerHTML=yes(d.time_synchronized,'synchronizovano','ceka na NTP');$('uptime').textContent=up(d.uptime_ms);$('cpu').textContent=d.cpu_mhz+' MHz / '+d.cpu_cores+' jadra';$('flash').textContent=kb(d.flash_bytes);$('reset_reason').textContent=d.reset_reason;$('heap_free').textContent=kb(d.heap_free);$('heap_min').textContent=kb(d.heap_min);$('heap_largest').textContent=kb(d.heap_largest);$('psram_free').textContent=kb(d.psram_free);$('psram_min').textContent=kb(d.psram_min);$('psram_largest').textContent=kb(d.psram_largest);$('network_mode').textContent=d.network_mode;$('ssid').textContent=d.ssid||'--';$('ip').textContent=d.ip;$('rssi').textContent=d.wifi_connected?d.rssi_dbm+' dBm':'--';$('hostname').textContent=d.hostname+'.local';$('portal').innerHTML=yes(d.portal_active,'aktivni','vypnuty');$('net_worker_state').textContent=d.network_worker_paused?'pozastaven':(d.network_worker_running?'pracuje':'idle');$('net_worker_job').textContent=d.network_active_job||'idle';$('net_worker_pending').textContent=d.network_pending_jobs;$('net_worker_last').textContent=d.network_last_result;$('net_worker_duration').textContent=d.network_last_job_ms+' / '+d.network_longest_job_ms+' ms';$('net_worker_counts').textContent=d.network_completed_jobs+' / '+d.network_failed_jobs+' / '+d.network_backoff_skips;$('backlight_state').innerHTML=yes(d.backlight_on,'zapnuto','vypnuto');$('backlight_schedule').textContent=d.backlight_schedule_enabled?(d.backlight_window_active?'aktivni interval':'mimo aktivni interval'):'plan vypnut';$('backlight_wake').textContent=d.backlight_temporary_wake?Math.ceil(d.backlight_wake_remaining_ms/1000)+' s':'neaktivni';$('map_view').textContent=d.map_view;$('map_redraws').textContent=d.map_redraw_count;$('map_duration').textContent=d.last_map_redraw_ms+' ms';$('lcd_resyncs').textContent=d.lcd_resync_count;$('lcd_age').textContent=age(d.lcd_resync_age_ms);$('lcd_load_guard').textContent=d.lcd_load_guard_triggers;$('longest_loop').textContent=d.longest_loop_ms+' ms';$('radar_status').textContent=d.radar_status;$('radar_frames').textContent=(d.radar_frame_count?(d.current_radar_frame+1)+' / '+d.radar_frame_count:'0 / 0')+' | cache '+(d.radar_cache_ready?'OK':'nepripravena');$('radar_age').textContent=age(d.radar_age_ms);$('lightning_status').textContent=d.lightning_status+' | '+(d.lightning_ready?'data OK':'bez dat');$('lightning_strikes').textContent=d.lightning_strike_count+' | realtime 20 min trail';$('lightning_age').textContent=age(d.lightning_age_ms);$('adsb_status').textContent=d.adsb_status;$('aircraft_count').textContent=d.aircraft_count;$('aircraft_sources').textContent=d.aircraft_local+' / '+d.aircraft_adsbfi+' / '+d.aircraft_mlat;$('adsb_age').textContent=age(d.adsb_age_ms);$('weather_status').textContent=d.weather_status+' | data '+(d.current_weather_valid?'OK':'chybi');$('weather_age').textContent=age(d.weather_age_ms);$('forecast_status').textContent=d.forecast_product+' | '+d.forecast_slot_count+' karet | '+(d.forecast_valid?'OK':'chyba');$('forecast_age').textContent=age(d.forecast_age_ms);$('astronomy_status').textContent=d.astronomy_status+' | '+(d.astronomy_valid?'OK':'chyba');$('astronomy_age').textContent=age(d.astronomy_age_ms);$('barometer_enabled').innerHTML=yes(d.barometer_enabled,'zapnut','vypnut');$('barometer_sensor').textContent=d.barometer_sensor+(d.barometer_address?' | 0x'+d.barometer_address.toString(16).toUpperCase():'');$('barometer_status').textContent=d.barometer_status;$('barometer_calibration').textContent=d.barometer_altitude_m.toFixed(1)+' m / '+(d.barometer_offset_hpa>=0?'+':'')+d.barometer_offset_hpa.toFixed(1)+' hPa';$('weather_pressure').textContent=d.weather_pressure_hpa===null?'--':d.weather_pressure_hpa.toFixed(1)+' hPa';$('barometer_pressure').textContent=d.barometer_valid?d.barometer_pressure_hpa.toFixed(1)+' hPa':'--';$('barometer_raw_pressure').textContent=d.barometer_valid?d.barometer_raw_pressure_hpa.toFixed(1)+' hPa':'--';$('barometer_temperature').textContent=d.barometer_valid?d.barometer_temperature_c.toFixed(1)+' C':'--';$('barometer_reduction_temperature').textContent=d.barometer_reduction_temperature_c===null?'--':d.barometer_reduction_temperature_c.toFixed(1)+' C';$('barometer_reduction_source').textContent=d.barometer_reduction_temperature_source;$('wu_temperature_average').textContent=d.wu_temperature_average_c===null?'bez dat':d.wu_temperature_average_c.toFixed(1)+' C | '+d.wu_temperature_sample_count+' vzorku / '+d.wu_temperature_span_h.toFixed(1)+' h';$('wu_temperature_age').textContent=d.wu_temperature_latest_epoch?age(Math.max(0,Date.now()-d.wu_temperature_latest_epoch*1000)):'bez dat';$('barometer_delta').textContent=d.barometer_delta_3h_hpa===null?'sbira se':(d.barometer_delta_3h_hpa>=0?'+':'')+d.barometer_delta_3h_hpa.toFixed(1)+' hPa';$('barometer_trend').textContent=d.barometer_trend+' | '+d.barometer_trend_hpa_h.toFixed(2)+' hPa/h';$('zambretti_code').textContent=d.zambretti_ready?d.zambretti_code:'sbira se 3h trend';$('zambretti_trend').textContent=d.zambretti_ready?d.zambretti_trend:'--';$('barometer_forecast').textContent=d.barometer_forecast;$('zambretti_wind').textContent=d.zambretti_wind_used?d.zambretti_wind_deg.toFixed(0)+' stupnu z pocasi':'bez smeru vetru';$('zambretti_season').textContent=d.zambretti_season_applied?'pouzita':'nepouzita';$('barometer_history').textContent=d.pressure_history_count+' / 289';$('barometer_age').textContent=age(d.barometer_age_ms);$('layers').textContent='Radar '+(d.radar_layer?'zapnut':'vypnut')+' | Blesky '+(d.lightning_layer?'zapnuty':'vypnuty')+' | ADS-B '+(d.adsb_layer?'zapnuto':'vypnuto');$('alerts').textContent=d.alert_enabled?d.alert_targets.filter(Boolean).join(' | '):'vypnuto';$('refresh_state').textContent='Aktualizovano '+new Date().toLocaleTimeString();}catch(e){$('refresh_state').innerHTML='<span class=bad>Diagnostiku se nepodarilo nacist: '+e+'</span>';}}loadData();setInterval(loadData,5000);</script></main></body></html>");
+  page += F("<script>const $=id=>document.getElementById(id);const kb=v=>Math.round(v/1024)+' kB';const age=v=>v<0?'dosud neprovedeno':v<1000?v+' ms':v<60000?Math.round(v/1000)+' s':v<3600000?Math.round(v/60000)+' min':(v/3600000).toFixed(1)+' h';const up=v=>{let s=Math.floor(v/1000),d=Math.floor(s/86400);s%=86400;let h=Math.floor(s/3600);s%=3600;let m=Math.floor(s/60);return (d?d+' d ':'')+h+' h '+m+' min'};const yes=(v,a='ano',n='ne')=>v?'<span class=ok>'+a+'</span>':'<span class=warn>'+n+'</span>';async function loadData(){try{const r=await fetch('/api/diagnostics',{cache:'no-store'});if(!r.ok)throw Error(r.status);const d=await r.json();$('firmware').textContent=d.firmware;$('local_datetime').textContent=d.local_date+' '+d.local_time;$('timezone').textContent=d.timezone+' (automaticky CET/CEST)';$('time_sync').innerHTML=yes(d.time_synchronized,'synchronizovano','ceka na NTP');$('uptime').textContent=up(d.uptime_ms);$('cpu').textContent=d.cpu_mhz+' MHz / '+d.cpu_cores+' jadra';$('flash').textContent=kb(d.flash_bytes);$('reset_reason').textContent=d.reset_reason;$('heap_free').textContent=kb(d.heap_free);$('heap_min').textContent=kb(d.heap_min);$('heap_largest').textContent=kb(d.heap_largest);$('psram_free').textContent=kb(d.psram_free);$('psram_min').textContent=kb(d.psram_min);$('psram_largest').textContent=kb(d.psram_largest);$('network_mode').textContent=d.network_mode;$('ssid').textContent=d.ssid||'--';$('ip').textContent=d.ip;$('rssi').textContent=d.wifi_connected?d.rssi_dbm+' dBm':'--';$('hostname').textContent=d.hostname+'.local';$('portal').innerHTML=yes(d.portal_active,'aktivni','vypnuty');$('net_worker_state').textContent=d.network_worker_paused?'pozastaven':(d.network_worker_running?'pracuje':'idle');$('net_worker_job').textContent=d.network_active_job||'idle';$('net_worker_pending').textContent=d.network_pending_jobs;$('net_worker_last').textContent=d.network_last_result;$('net_worker_duration').textContent=d.network_last_job_ms+' / '+d.network_longest_job_ms+' ms';$('net_worker_counts').textContent=d.network_completed_jobs+' / '+d.network_failed_jobs+' / '+d.network_backoff_skips;$('backlight_state').innerHTML=yes(d.backlight_on,'zapnuto','vypnuto');$('backlight_schedule').textContent=d.backlight_schedule_enabled?(d.backlight_window_active?'aktivni interval':'mimo aktivni interval'):'plan vypnut';$('backlight_wake').textContent=d.backlight_temporary_wake?Math.ceil(d.backlight_wake_remaining_ms/1000)+' s':'neaktivni';$('map_view').textContent=d.map_view;$('map_redraws').textContent=d.map_redraw_count;$('map_duration').textContent=d.last_map_redraw_ms+' ms';$('lcd_resyncs').textContent=d.lcd_resync_count;$('lcd_age').textContent=age(d.lcd_resync_age_ms);$('lcd_load_guard').textContent=d.lcd_load_guard_triggers;$('longest_loop').textContent=d.longest_loop_ms+' ms';$('radar_status').textContent=d.radar_status;$('radar_frames').textContent=(d.radar_frame_count?(d.current_radar_frame+1)+' / '+d.radar_frame_count:'0 / 0')+' | cache '+(d.radar_cache_ready?'OK':'nepripravena');$('radar_age').textContent=age(d.radar_age_ms);$('radar_expected').textContent=d.radar_expected_frame||'--';$('radar_next').textContent=d.radar_next_fetch_s===null?'ceka na NTP':d.radar_next_fetch_s+' s';$('radar_direct').textContent=d.radar_direct_requests+' / '+d.radar_direct_success+' / '+d.radar_direct_404;$('radar_transport').textContent=d.radar_direct_transport_failures+' / '+d.radar_last_http_code;$('radar_fallback').textContent=d.radar_index_fallbacks;$('lightning_status').textContent=d.lightning_status+' | '+(d.lightning_ready?'data OK':'bez dat');$('lightning_strikes').textContent=d.lightning_strike_count+' | realtime 20 min trail';$('lightning_frames').textContent=kb(d.lightning_last_frame_bytes)+' / '+kb(d.lightning_largest_frame_bytes);$('lightning_json').textContent=d.lightning_json_messages+' / '+d.lightning_json_control_messages+' / '+d.lightning_json_errors;$('lightning_worker').textContent=(d.lightning_worker_running?'bezi':'stoji')+' / '+d.lightning_worker_stack_min_bytes+' B';$('lightning_skipped').textContent=d.lightning_large_frames_skipped;$('lightning_strokes_rx').textContent=d.lightning_strokes_received+' / '+d.lightning_strokes_accepted+' / '+d.lightning_strokes_outside_map;$('lightning_strokes_drop').textContent=d.lightning_strokes_duplicates+' / '+d.lightning_strokes_invalid;$('lightning_disconnects').textContent=d.lightning_disconnect_count;$('lightning_age').textContent=age(d.lightning_age_ms);$('adsb_status').textContent=d.adsb_status;$('aircraft_count').textContent=d.aircraft_count;$('aircraft_sources').textContent=d.aircraft_local+' / '+d.aircraft_adsbfi+' / '+d.aircraft_mlat;$('adsbfi_diag_status').textContent=d.adsbfi_status;$('adsbfi_counts').textContent=d.adsbfi_attempts+' / '+d.adsbfi_successes+' / '+d.adsbfi_failures;$('adsbfi_dns').textContent=(d.adsbfi_dns_ok?'OK ':'FAIL ')+(d.adsbfi_resolved_ip||'--');$('adsbfi_http').textContent=d.adsbfi_http_code+' | '+d.adsbfi_http_error+' | Content-Length '+d.adsbfi_content_length;$('adsbfi_body').textContent=d.adsbfi_body_bytes+' B | '+d.adsbfi_body_error;$('adsbfi_json').textContent=(d.adsbfi_json_ok?'OK':'FAIL')+' | '+d.adsbfi_json_error+' | API '+d.adsbfi_api_aircraft+'/'+d.adsbfi_api_total+' | mapa '+d.adsbfi_accepted;$('adsbfi_timing').textContent=d.adsbfi_last_duration_ms+' ms | pokus '+age(d.adsbfi_last_attempt_age_ms)+' | uspech '+age(d.adsbfi_last_success_age_ms);$('adsb_age').textContent=age(d.adsb_age_ms);$('weather_status').textContent=d.weather_status+' | data '+(d.current_weather_valid?'OK':'chybi');$('weather_age').textContent=age(d.weather_age_ms);$('forecast_status').textContent=d.forecast_product+' | '+d.forecast_slot_count+' karet | '+(d.forecast_valid?'OK':'chyba');$('forecast_age').textContent=age(d.forecast_age_ms);$('astronomy_status').textContent=d.astronomy_status+' | '+(d.astronomy_valid?'OK':'chyba');$('astronomy_age').textContent=age(d.astronomy_age_ms);$('barometer_enabled').innerHTML=yes(d.barometer_enabled,'zapnut','vypnut');$('barometer_sensor').textContent=d.barometer_sensor+(d.barometer_address?' | 0x'+d.barometer_address.toString(16).toUpperCase():'');$('barometer_status').textContent=d.barometer_status;$('barometer_calibration').textContent=d.barometer_altitude_m.toFixed(1)+' m / '+(d.barometer_offset_hpa>=0?'+':'')+d.barometer_offset_hpa.toFixed(1)+' hPa';$('weather_pressure').textContent=d.weather_pressure_hpa===null?'--':d.weather_pressure_hpa.toFixed(1)+' hPa';$('barometer_pressure').textContent=d.barometer_valid?d.barometer_pressure_hpa.toFixed(1)+' hPa':'--';$('barometer_raw_pressure').textContent=d.barometer_valid?d.barometer_raw_pressure_hpa.toFixed(1)+' hPa':'--';$('barometer_temperature').textContent=d.barometer_valid?d.barometer_temperature_c.toFixed(1)+' C':'--';$('barometer_reduction_temperature').textContent=d.barometer_reduction_temperature_c===null?'--':d.barometer_reduction_temperature_c.toFixed(1)+' C';$('barometer_reduction_source').textContent=d.barometer_reduction_temperature_source;$('wu_temperature_average').textContent=d.wu_temperature_average_c===null?'bez dat':d.wu_temperature_average_c.toFixed(1)+' C | '+d.wu_temperature_sample_count+' vzorku / '+d.wu_temperature_span_h.toFixed(1)+' h';$('wu_temperature_age').textContent=d.wu_temperature_latest_epoch?age(Math.max(0,Date.now()-d.wu_temperature_latest_epoch*1000)):'bez dat';$('barometer_delta').textContent=d.barometer_delta_3h_hpa===null?'sbira se':(d.barometer_delta_3h_hpa>=0?'+':'')+d.barometer_delta_3h_hpa.toFixed(1)+' hPa';$('barometer_trend').textContent=d.barometer_trend+' | '+d.barometer_trend_hpa_h.toFixed(2)+' hPa/h';$('zambretti_code').textContent=d.zambretti_ready?d.zambretti_code:'sbira se 3h trend';$('zambretti_trend').textContent=d.zambretti_ready?d.zambretti_trend:'--';$('barometer_forecast').textContent=d.barometer_forecast;$('zambretti_wind').textContent=d.zambretti_wind_used?d.zambretti_wind_deg.toFixed(0)+' stupnu z pocasi':'bez smeru vetru';$('zambretti_season').textContent=d.zambretti_season_applied?'pouzita':'nepouzita';$('barometer_history').textContent=d.pressure_history_count+' / 289';$('barometer_age').textContent=age(d.barometer_age_ms);$('layers').textContent='Radar '+(d.radar_layer?'zapnut':'vypnut')+' | Blesky '+(d.lightning_layer?'zapnuty':'vypnuty')+' | ADS-B '+(d.adsb_layer?'zapnuto':'vypnuto');$('alerts').textContent=d.alert_enabled?d.alert_targets.filter(Boolean).join(' | '):'vypnuto';$('refresh_state').textContent='Aktualizovano '+new Date().toLocaleTimeString();}catch(e){$('refresh_state').innerHTML='<span class=bad>Diagnostiku se nepodarilo nacist: '+e+'</span>';}}loadData();setInterval(loadData,5000);</script></main></body></html>");
   return page;
 }
 
@@ -1075,12 +1200,61 @@ void DeviceConfigService::handleDiagnosticsJson() {
   json += boolJson(diagnostics.radarCacheReady);
   json += F(",\"radar_age_ms\":");
   json += String(ageMs(now, diagnostics.lastRadarUpdateMs));
+  json += F(",\"radar_expected_frame\":\"");
+  json += jsonEscape(diagnostics.radarExpectedFrame);
+  json += F("\",\"radar_next_fetch_s\":");
+  if (diagnostics.radarNextFetchSec == UINT32_MAX) json += F("null");
+  else json += String(diagnostics.radarNextFetchSec);
+  json += F(",\"radar_direct_requests\":");
+  json += String(diagnostics.radarDirectRequests);
+  json += F(",\"radar_direct_success\":");
+  json += String(diagnostics.radarDirectSuccess);
+  json += F(",\"radar_direct_404\":");
+  json += String(diagnostics.radarDirectNotFound);
+  json += F(",\"radar_direct_transport_failures\":");
+  json += String(diagnostics.radarDirectTransportFailures);
+  json += F(",\"radar_last_http_code\":");
+  json += String(diagnostics.radarLastHttpCode);
+  json += F(",\"radar_index_fallbacks\":");
+  json += String(diagnostics.radarIndexFallbacks);
   json += F(",\"lightning_status\":\"");
   json += jsonEscape(diagnostics.lightningStatus);
   json += F("\",\"lightning_ready\":");
   json += boolJson(diagnostics.lightningReady);
   json += F(",\"lightning_strike_count\":");
   json += String(diagnostics.lightningStrikeCount);
+  json += F(",\"lightning_last_frame_bytes\":");
+  json += String(static_cast<unsigned>(diagnostics.lightningLastFrameBytes));
+  json += F(",\"lightning_largest_frame_bytes\":");
+  json += String(static_cast<unsigned>(diagnostics.lightningLargestFrameBytes));
+  json += F(",\"lightning_json_messages\":");
+  json += String(diagnostics.lightningJsonMessages);
+  json += F(",\"lightning_json_errors\":");
+  json += String(diagnostics.lightningJsonErrors);
+  json += F(",\"lightning_json_control_messages\":");
+  json += String(diagnostics.lightningJsonControlMessages);
+  json += F(",\"lightning_large_frames_skipped\":");
+  json += String(diagnostics.lightningLargeFramesSkipped);
+  json += F(",\"lightning_worker_running\":");
+  json += boolJson(diagnostics.lightningWorkerRunning);
+  json += F(",\"lightning_worker_stack_min_bytes\":");
+  json += String(diagnostics.lightningWorkerStackMinBytes);
+  json += F(",\"lightning_tls_paused\":");
+  json += boolJson(diagnostics.lightningTlsPaused);
+  json += F(",\"lightning_tls_pause_count\":");
+  json += String(diagnostics.lightningTlsPauseCount);
+  json += F(",\"lightning_strokes_received\":");
+  json += String(diagnostics.lightningStrokesReceived);
+  json += F(",\"lightning_strokes_accepted\":");
+  json += String(diagnostics.lightningStrokesAccepted);
+  json += F(",\"lightning_strokes_outside_map\":");
+  json += String(diagnostics.lightningStrokesOutsideMap);
+  json += F(",\"lightning_strokes_duplicates\":");
+  json += String(diagnostics.lightningStrokesDuplicates);
+  json += F(",\"lightning_strokes_invalid\":");
+  json += String(diagnostics.lightningStrokesInvalid);
+  json += F(",\"lightning_disconnect_count\":");
+  json += String(diagnostics.lightningDisconnectCount);
   json += F(",\"lightning_age_ms\":");
   json += String(ageMs(now, diagnostics.lastLightningUpdateMs));
   json += F(",\"adsb_status\":\"");
@@ -1093,7 +1267,45 @@ void DeviceConfigService::handleDiagnosticsJson() {
   json += String(static_cast<unsigned>(diagnostics.adsbFiAircraftCount));
   json += F(",\"aircraft_mlat\":");
   json += String(static_cast<unsigned>(diagnostics.mlatAircraftCount));
-  json += F(",\"adsb_age_ms\":");
+  json += F(",\"adsbfi_attempts\":");
+  json += String(diagnostics.adsbFiAttempts);
+  json += F(",\"adsbfi_successes\":");
+  json += String(diagnostics.adsbFiSuccesses);
+  json += F(",\"adsbfi_failures\":");
+  json += String(diagnostics.adsbFiFailures);
+  json += F(",\"adsbfi_dns_ok\":");
+  json += boolJson(diagnostics.adsbFiDnsOk);
+  json += F(",\"adsbfi_resolved_ip\":\"");
+  json += jsonEscape(diagnostics.adsbFiResolvedIp);
+  json += F("\",\"adsbfi_http_code\":");
+  json += String(diagnostics.adsbFiHttpCode);
+  json += F(",\"adsbfi_http_error\":\"");
+  json += jsonEscape(diagnostics.adsbFiHttpError);
+  json += F("\",\"adsbfi_content_length\":");
+  json += String(diagnostics.adsbFiContentLength);
+  json += F(",\"adsbfi_body_bytes\":");
+  json += String(static_cast<unsigned>(diagnostics.adsbFiBodyBytes));
+  json += F(",\"adsbfi_body_error\":\"");
+  json += jsonEscape(diagnostics.adsbFiBodyError);
+  json += F("\",\"adsbfi_json_ok\":");
+  json += boolJson(diagnostics.adsbFiJsonOk);
+  json += F(",\"adsbfi_json_error\":\"");
+  json += jsonEscape(diagnostics.adsbFiJsonError);
+  json += F("\",\"adsbfi_api_total\":");
+  json += String(static_cast<unsigned>(diagnostics.adsbFiApiTotal));
+  json += F(",\"adsbfi_api_aircraft\":");
+  json += String(static_cast<unsigned>(diagnostics.adsbFiApiAircraft));
+  json += F(",\"adsbfi_accepted\":");
+  json += String(static_cast<unsigned>(diagnostics.adsbFiAcceptedAircraft));
+  json += F(",\"adsbfi_last_duration_ms\":");
+  json += String(diagnostics.adsbFiLastDurationMs);
+  json += F(",\"adsbfi_last_attempt_age_ms\":");
+  json += String(ageMs(now, diagnostics.adsbFiLastAttemptMs));
+  json += F(",\"adsbfi_last_success_age_ms\":");
+  json += String(ageMs(now, diagnostics.adsbFiLastSuccessMs));
+  json += F(",\"adsbfi_status\":\"");
+  json += jsonEscape(diagnostics.adsbFiStatus);
+  json += F("\",\"adsb_age_ms\":");
   json += String(ageMs(now, diagnostics.lastAdsbUpdateMs));
   json += F(",\"weather_status\":\"");
   json += jsonEscape(diagnostics.weatherStatus);

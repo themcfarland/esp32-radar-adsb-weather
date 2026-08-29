@@ -856,7 +856,7 @@ void drawReference(lv_obj_t* canvas, uint16_t* buffer, uint16_t width,
   drawText(canvas, 10, height - 18, 340, footer, 0x91A9B7,
            &lv_font_montserrat_10);
   drawText(canvas, width - 190, height - 18, 180,
-           "ADS-B: local + adsb.fi/adsb.lol", 0x91A9B7,
+           "ADS-B: local + adsb.fi", 0x91A9B7,
            &lv_font_montserrat_10, LV_TEXT_ALIGN_RIGHT);
 }
 

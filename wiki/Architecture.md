@@ -78,7 +78,7 @@ Požadavky se plánují přibližně v těchto intervalech; skutečné spuštěn
 - lokální ADS-B: 2 s,
 - adsb.fi: 10 s,
 - stáří blesků/redraw: 30 s,
-- radar: 5 min,
+- radar: přesné CHMI 5min sloty; přímý PNG pokus +20/+40/+60 s, index jen nouzově při zastaralé cache,
 - aktuální počasí: 5 min,
 - předpověď: 1 h,
 - astronomie: 1 min,
